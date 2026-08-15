@@ -37,7 +37,7 @@
 - [x] `needs:` DAG execution
 - [x] `services:` linked helper containers
 - [ ] `include:` remote / project
-- [ ] Colored streaming output
+- [x] Colored streaming output
 - [ ] Pipeline graph (`gitlab-ci-sim graph`)
 - [ ] Watch mode (`gitlab-ci-sim run --watch`)
 - [ ] Masked / declared-only variables
