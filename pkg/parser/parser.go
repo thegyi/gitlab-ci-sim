@@ -45,6 +45,23 @@ func (t *Trigger) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	return unmarshal((*raw)(t))
 }
 
+// Parallel represents a parallel: job configuration.
+type Parallel struct {
+	Scalar int                   `yaml:"scalar"`
+	Matrix []map[string][]string `yaml:"matrix"`
+}
+
+// UnmarshalYAML supports both scalar counts and full mapping forms.
+func (p *Parallel) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var n int
+	if err := unmarshal(&n); err == nil {
+		p.Scalar = n
+		return nil
+	}
+	type raw Parallel
+	return unmarshal((*raw)(p))
+}
+
 // Retry represents a retry: job configuration.
 type Retry struct {
 	Max  int      `yaml:"max"`
@@ -82,7 +99,8 @@ type Job struct {
 	Extends      interface{}         `yaml:"extends"`
 	AllowFailure bool                `yaml:"allow_failure"`
 	When         string              `yaml:"when"`
-	Parallel     interface{}         `yaml:"parallel"`
+	StartIn      string              `yaml:"start_in"`
+	Parallel     *Parallel           `yaml:"parallel"`
 	Tags         []string            `yaml:"tags"`
 	Retry        *Retry              `yaml:"retry"`
 	Trigger      *Trigger            `yaml:"trigger"`

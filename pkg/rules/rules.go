@@ -103,7 +103,7 @@ func buildResult(when string, ruleVars map[string]string, allowManual bool) *Res
 	if when == "never" {
 		run = false
 	}
-	if (when == "manual" || when == "delayed") && !allowManual {
+	if when == "manual" && !allowManual {
 		run = false
 	}
 	return &Result{

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -308,6 +309,16 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 		}
 		for _, need := range artifactSources {
 			_ = e.store.Restore(need, workDir)
+		}
+	}
+
+	if job.When == "delayed" && job.StartIn != "" {
+		d, err := parseStartIn(job.StartIn)
+		if err == nil {
+			fmt.Fprintf(&out, "│  │  %s: delaying for %s\n", term.Yellow("Delayed"), job.StartIn)
+			e.flushOutput(&out)
+			out.Reset()
+			time.Sleep(d)
 		}
 	}
 
@@ -631,6 +642,20 @@ func allPipelineJobs(p *pipeline.Pipeline) []*pipeline.PipelineJob {
 }
 
 // needsMet reports whether every job listed in job.Needs has completed successfully.
+func parseStartIn(s string) (time.Duration, error) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.ReplaceAll(s, " ", "")
+	s = strings.NewReplacer("seconds", "s", "second", "s", "minutes", "m", "minute", "m", "hours", "h", "hour", "h").Replace(s)
+	if strings.HasSuffix(s, "d") {
+		n, err := strconv.Atoi(strings.TrimSuffix(s, "d"))
+		if err != nil {
+			return 0, err
+		}
+		return time.Duration(n) * 24 * time.Hour, nil
+	}
+	return time.ParseDuration(s)
+}
+
 func needsMet(job *pipeline.PipelineJob, completed map[string]bool) bool {
 	for _, need := range job.Needs {
 		if !completed[need] {

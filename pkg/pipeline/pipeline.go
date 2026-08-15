@@ -3,6 +3,8 @@ package pipeline
 import (
 	"fmt"
 	"io"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/thegyi/gitlab-ci-sim/pkg/parser"
@@ -38,12 +40,15 @@ type PipelineJob struct {
 	Needs        []string
 	Dependencies []string
 	AllowFailure bool
+	When         string
 	Retry        *parser.Retry
+	StartIn      string
 	Trigger      *parser.Trigger
 }
 
 // Build creates an executable pipeline from the parsed config.
-func Build(config *parser.Config, vars *variables.Context, jobFilter []string) (*Pipeline, error) {
+// If allowManual is true, jobs with when: manual are treated as runnable.
+func Build(config *parser.Config, vars *variables.Context, jobFilter []string, allowManual bool) (*Pipeline, error) {
 	pipe := &Pipeline{}
 
 	// Create stage map for ordering
@@ -66,7 +71,7 @@ func Build(config *parser.Config, vars *variables.Context, jobFilter []string) (
 		}
 
 		// Evaluate rules, only/except and when.
-		res, err := rules.ShouldRun(job, vars, contains(jobFilter, name))
+		res, err := rules.ShouldRun(job, vars, allowManual)
 		if err != nil {
 			return nil, err
 		}
@@ -106,10 +111,12 @@ func Build(config *parser.Config, vars *variables.Context, jobFilter []string) (
 			Needs:        job.Needs,
 			Dependencies: job.Dependencies,
 			AllowFailure: job.AllowFailure,
+			When:         res.When,
 			Retry:        job.Retry,
+			StartIn:      job.StartIn,
 			Trigger:      job.Trigger,
 		}
-		stages[idx].Jobs = append(stages[idx].Jobs, pj)
+		expandParallel(stages[idx], pj, name, job.Parallel)
 	}
 
 	// Filter out empty stages
@@ -159,6 +166,99 @@ func serviceNames(services []parser.Service) string {
 		names = append(names, n)
 	}
 	return strings.Join(names, ", ")
+}
+
+func expandParallel(stage *Stage, base *PipelineJob, name string, parallel *parser.Parallel) {
+	if parallel == nil || (parallel.Scalar == 0 && len(parallel.Matrix) == 0) {
+		stage.Jobs = append(stage.Jobs, base)
+		return
+	}
+	if parallel.Scalar > 0 {
+		for i := 1; i <= parallel.Scalar; i++ {
+			job := cloneJob(base)
+			job.Name = fmt.Sprintf("%s %d/%d", name, i, parallel.Scalar)
+			job.Variables["CI_NODE_INDEX"] = strconv.Itoa(i)
+			job.Variables["CI_NODE_TOTAL"] = strconv.Itoa(parallel.Scalar)
+			stage.Jobs = append(stage.Jobs, job)
+		}
+		return
+	}
+
+	// Build the list of all matrix combinations across all matrix blocks.
+	var combinations []map[string]string
+	for _, block := range parallel.Matrix {
+		combos := cartesianProduct(block)
+		combinations = append(combinations, combos...)
+	}
+	total := len(combinations)
+	for i, combo := range combinations {
+		job := cloneJob(base)
+		labelParts := make([]string, 0, len(combo))
+		keys := make([]string, 0, len(combo))
+		for k := range combo {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			job.Variables[k] = combo[k]
+			labelParts = append(labelParts, fmt.Sprintf("%s=%s", k, combo[k]))
+		}
+		job.Name = fmt.Sprintf("%s [%s]", name, strings.Join(labelParts, ","))
+		job.Variables["CI_NODE_INDEX"] = strconv.Itoa(i + 1)
+		job.Variables["CI_NODE_TOTAL"] = strconv.Itoa(total)
+		stage.Jobs = append(stage.Jobs, job)
+	}
+}
+
+func cloneJob(base *PipelineJob) *PipelineJob {
+	j := *base
+	j.Variables = make(map[string]string, len(base.Variables))
+	for k, v := range base.Variables {
+		j.Variables[k] = v
+	}
+	j.Declared = make(map[string]bool, len(base.Declared))
+	for k, v := range base.Declared {
+		j.Declared[k] = v
+	}
+	j.Masked = make(map[string]bool, len(base.Masked))
+	for k, v := range base.Masked {
+		j.Masked[k] = v
+	}
+	j.Needs = append([]string{}, base.Needs...)
+	j.Dependencies = append([]string{}, base.Dependencies...)
+	j.Services = append([]parser.Service{}, base.Services...)
+	j.Script = append([]string{}, base.Script...)
+	j.BeforeScript = append([]string{}, base.BeforeScript...)
+	j.AfterScript = append([]string{}, base.AfterScript...)
+	return &j
+}
+
+func cartesianProduct(block map[string][]string) []map[string]string {
+	keys := make([]string, 0, len(block))
+	for k := range block {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var result []map[string]string
+	var dfs func(int, map[string]string)
+	dfs = func(idx int, current map[string]string) {
+		if idx == len(keys) {
+			combo := make(map[string]string, len(current))
+			for k, v := range current {
+				combo[k] = v
+			}
+			result = append(result, combo)
+			return
+		}
+		k := keys[idx]
+		for _, v := range block[k] {
+			current[k] = v
+			dfs(idx+1, current)
+		}
+	}
+	dfs(0, make(map[string]string))
+	return result
 }
 
 func resolveImage(job *parser.Job, defaults *parser.JobDefaults, vars *variables.Context) string {

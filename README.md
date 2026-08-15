@@ -147,6 +147,9 @@ gitlab-ci-sim run --branch main
 - [x] `artifacts:` and `cache:` passing between jobs
 - [x] `needs:` / `dependencies:` DAG execution and artifact passing
 - [x] `retry:` on failed jobs
+- [x] `when: manual` / `when: delayed` support
+- [x] `parallel:` / `matrix:` expansion
+- [x] Interactive job selection
 - [x] Dry-run mode and pipeline graph (`gitlab-ci-sim graph`)
 - [x] Watch mode (re-run on config changes)
 - [x] Graceful shutdown on `SIGINT`/`SIGTERM`
@@ -155,11 +158,9 @@ gitlab-ci-sim run --branch main
 - [x] Config linting/validation
 
 ### Planned
-- [ ] `parallel:` / `matrix:` expansion
-- [ ] `when: manual` / `when: delayed` support
-- [ ] Interactive job selection
-
-- [ ] Richer linting
+- [ ] Service health checks
+- [ ] `tags` filtering
+- [ ] Docker-in-Docker / privileged containers
 
 ## Notes and limitations
 

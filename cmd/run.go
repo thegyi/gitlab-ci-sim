@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -35,6 +37,8 @@ func init() {
 	runCmd.Flags().String("runtime", "docker", "Container runtime to use: docker, podman, or fake")
 	runCmd.Flags().String("trigger-mode", "local", "Trigger handling: local (no-op) or gitlab (call GitLab API)")
 	runCmd.Flags().Bool("list", false, "List jobs that would run and exit")
+	runCmd.Flags().Bool("manual", false, "Treat when: manual jobs as runnable")
+	runCmd.Flags().Bool("interactive", false, "Interactively select which jobs to run")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -51,6 +55,8 @@ func runJobs(cmd *cobra.Command, args []string) error {
 	}
 	varOverrides = append(varOverrides, envVars...)
 	list, _ := cmd.Flags().GetBool("list")
+	manual, _ := cmd.Flags().GetBool("manual")
+	interactive, _ := cmd.Flags().GetBool("interactive")
 
 	lastMod := time.Time{}
 	if watch {
@@ -131,7 +137,23 @@ func runJobs(cmd *cobra.Command, args []string) error {
 		}
 
 		// Build the pipeline (resolve stages, needs, rules)
-		pipe, err := pipeline.Build(config, vars, args)
+		if watch && interactive {
+			return fmt.Errorf("--interactive cannot be used with --watch")
+		}
+		allowManual := manual || len(args) > 0
+		if interactive {
+			allPipe, err := pipeline.Build(config, vars, nil, true)
+			if err != nil {
+				return fmt.Errorf("failed to build pipeline: %w", err)
+			}
+			selected, err := selectJobs(allPipe)
+			if err != nil {
+				return err
+			}
+			args = selected
+			allowManual = true
+		}
+		pipe, err := pipeline.Build(config, vars, args, allowManual)
 		if err != nil {
 			if !watch {
 				return fmt.Errorf("failed to build pipeline: %w", err)
@@ -212,6 +234,76 @@ func runJobs(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	}
+}
+
+func selectJobs(pipe *pipeline.Pipeline) ([]string, error) {
+	var jobs []string
+	idx := 1
+	for _, s := range pipe.Stages {
+		for _, j := range s.Jobs {
+			fmt.Fprintf(os.Stdout, "%d. %s (%s)\n", idx, j.Name, s.Name)
+			jobs = append(jobs, j.Name)
+			idx++
+		}
+	}
+	fmt.Print("Select jobs (numbers, ranges, comma-separated, or 'all'): ")
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	line = strings.TrimSpace(line)
+	if line == "" || line == "all" {
+		return jobs, nil
+	}
+	selected := parseSelection(line, len(jobs))
+	var out []string
+	for _, i := range selected {
+		if i >= 1 && i <= len(jobs) {
+			out = append(out, jobs[i-1])
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no jobs selected")
+	}
+	return out, nil
+}
+
+func parseSelection(input string, max int) []int {
+	var selected []int
+	seen := make(map[int]bool)
+	for _, part := range strings.Split(input, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		start, end := 0, 0
+		if strings.Contains(part, "-") {
+			rangeParts := strings.SplitN(part, "-", 2)
+			s, _ := strconv.Atoi(strings.TrimSpace(rangeParts[0]))
+			e, _ := strconv.Atoi(strings.TrimSpace(rangeParts[1]))
+			start, end = s, e
+			if start > end {
+				start, end = end, start
+			}
+		} else {
+			n, _ := strconv.Atoi(part)
+			start, end = n, n
+		}
+		if start < 1 {
+			start = 1
+		}
+		if end > max {
+			end = max
+		}
+		for i := start; i <= end; i++ {
+			if !seen[i] {
+				seen[i] = true
+				selected = append(selected, i)
+			}
+		}
+	}
+	return selected
 }
 
 func waitForChange(path string, lastMod *time.Time) error {
