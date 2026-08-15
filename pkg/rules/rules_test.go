@@ -177,6 +177,46 @@ func TestEvalIfRegexNotMatch(t *testing.T) {
 	}
 }
 
+func TestEvaluateWorkflow(t *testing.T) {
+	ctx := testContext()
+
+	// No workflow -> run
+	res, err := EvaluateWorkflow(nil, ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Run {
+		t.Error("nil workflow should run")
+	}
+
+	// Matching rule with when: never -> do not run
+	wf := &parser.Workflow{
+		Rules: []parser.Rule{{If: `CI_COMMIT_BRANCH == "main"`, When: "never"}},
+	}
+	res, err = EvaluateWorkflow(wf, ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Run {
+		t.Error("workflow when: never should not run")
+	}
+
+	// Matching rule with variables -> run and set variables
+	wf = &parser.Workflow{
+		Rules: []parser.Rule{{If: `CI_COMMIT_BRANCH == "main"`, Variables: map[string]string{"GLOBAL": "set"}}},
+	}
+	res, err = EvaluateWorkflow(wf, ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Run {
+		t.Error("workflow rule should run")
+	}
+	if res.Variables["GLOBAL"] != "set" {
+		t.Errorf("expected workflow variable GLOBAL=set, got %q", res.Variables["GLOBAL"])
+	}
+}
+
 func TestChangesMatch(t *testing.T) {
 	dir := t.TempDir()
 	old, _ := os.Getwd()

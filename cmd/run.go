@@ -1,9 +1,13 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -11,6 +15,7 @@ import (
 	"github.com/thegyi/gitlab-ci-sim/pkg/executor"
 	"github.com/thegyi/gitlab-ci-sim/pkg/parser"
 	"github.com/thegyi/gitlab-ci-sim/pkg/pipeline"
+	"github.com/thegyi/gitlab-ci-sim/pkg/rules"
 	"github.com/thegyi/gitlab-ci-sim/pkg/term"
 	"github.com/thegyi/gitlab-ci-sim/pkg/variables"
 )
@@ -29,6 +34,7 @@ func init() {
 	runCmd.Flags().Bool("watch", false, "Re-run the pipeline when .gitlab-ci.yml changes")
 	runCmd.Flags().String("runtime", "docker", "Container runtime to use: docker, podman, or fake")
 	runCmd.Flags().String("trigger-mode", "local", "Trigger handling: local (no-op) or gitlab (call GitLab API)")
+	runCmd.Flags().Bool("list", false, "List jobs that would run and exit")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -38,6 +44,7 @@ func runJobs(cmd *cobra.Command, args []string) error {
 	watch, _ := cmd.Flags().GetBool("watch")
 	branch, _ := cmd.Flags().GetString("branch")
 	varOverrides, _ := cmd.Flags().GetStringSlice("variable")
+	list, _ := cmd.Flags().GetBool("list")
 
 	lastMod := time.Time{}
 	if watch {
@@ -89,6 +96,34 @@ func runJobs(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
+		// Apply workflow-level rules
+		if config.Workflow != nil {
+			wfRes, err := rules.EvaluateWorkflow(config.Workflow, vars)
+			if err != nil {
+				if !watch {
+					return fmt.Errorf("failed to evaluate workflow rules: %w", err)
+				}
+				fmt.Fprintf(os.Stderr, "%s: %v\n", term.Red("workflow error"), err)
+				if err := waitForChange(configFile, &lastMod); err != nil {
+					return err
+				}
+				continue
+			}
+			if !wfRes.Run {
+				if !watch {
+					return fmt.Errorf("pipeline skipped by workflow rules")
+				}
+				fmt.Fprintf(os.Stderr, "%s: pipeline skipped by workflow rules\n", term.Yellow("skip"))
+				if err := waitForChange(configFile, &lastMod); err != nil {
+					return err
+				}
+				continue
+			}
+			if len(wfRes.Variables) > 0 {
+				vars = vars.With(wfRes.Variables)
+			}
+		}
+
 		// Build the pipeline (resolve stages, needs, rules)
 		pipe, err := pipeline.Build(config, vars, args)
 		if err != nil {
@@ -115,6 +150,21 @@ func runJobs(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
+		if list {
+			fmt.Fprintln(os.Stdout, "Jobs that would run:")
+			for _, stage := range pipe.Stages {
+				fmt.Fprintf(os.Stdout, "  stage: %s\n", stage.Name)
+				for _, job := range stage.Jobs {
+					extra := ""
+					if len(job.Needs) > 0 {
+						extra = fmt.Sprintf(" (needs: %s)", strings.Join(job.Needs, ", "))
+					}
+					fmt.Fprintf(os.Stdout, "    - %s%s\n", job.Name, extra)
+				}
+			}
+			return nil
+		}
+
 		if dryRun {
 			pipe.Print(os.Stdout)
 		} else {
@@ -138,7 +188,9 @@ func runJobs(cmd *cobra.Command, args []string) error {
 			}
 			triggerMode, _ := cmd.Flags().GetString("trigger-mode")
 			exec.SetTriggerMode(triggerMode)
-			result := exec.Run(pipe, vars)
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			result := exec.Run(ctx, pipe, vars)
 			result.Print(os.Stdout)
 		}
 

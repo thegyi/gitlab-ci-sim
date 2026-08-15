@@ -58,6 +58,7 @@ type Job struct {
 	Only         *OnlyExcept         `yaml:"only"`
 	Except       *OnlyExcept         `yaml:"except"`
 	Needs        []string            `yaml:"needs"`
+	Dependencies []string            `yaml:"dependencies"`
 	Artifacts    *Artifacts          `yaml:"artifacts"`
 	Cache        *Cache              `yaml:"cache"`
 	Services     []Service           `yaml:"services"`

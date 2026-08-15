@@ -60,6 +60,41 @@ func ShouldRun(job *parser.Job, vars *variables.Context, allowManual bool) (*Res
 	return buildResult(job.When, nil, allowManual), nil
 }
 
+// EvaluateWorkflow evaluates workflow-level rules.
+// The first matching rule wins. If no rules match, the pipeline does not run.
+func EvaluateWorkflow(workflow *parser.Workflow, vars *variables.Context) (*Result, error) {
+	if workflow == nil || len(workflow.Rules) == 0 {
+		return &Result{Run: true}, nil
+	}
+	for _, r := range workflow.Rules {
+		if r.If != "" {
+			ok, err := evalIf(r.If, vars)
+			if err != nil {
+				return nil, fmt.Errorf("workflow rule if: %w", err)
+			}
+			if !ok {
+				continue
+			}
+		}
+		if len(r.Changes) > 0 && !changesMatch(r.Changes) {
+			continue
+		}
+		if len(r.Exists) > 0 && !existsMatch(r.Exists) {
+			continue
+		}
+		when := r.When
+		if when == "" {
+			when = "always"
+		}
+		return &Result{
+			Run:       when != "never",
+			When:      when,
+			Variables: r.Variables,
+		}, nil
+	}
+	return &Result{Run: false}, nil
+}
+
 func buildResult(when string, ruleVars map[string]string, allowManual bool) *Result {
 	if when == "" {
 		when = "on_success"

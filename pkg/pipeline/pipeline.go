@@ -3,6 +3,7 @@ package pipeline
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/thegyi/gitlab-ci-sim/pkg/parser"
 	"github.com/thegyi/gitlab-ci-sim/pkg/rules"
@@ -35,6 +36,7 @@ type PipelineJob struct {
 	Artifacts    *parser.Artifacts
 	Cache        *parser.Cache
 	Needs        []string
+	Dependencies []string
 	AllowFailure bool
 	Trigger      *parser.Trigger
 }
@@ -101,6 +103,7 @@ func Build(config *parser.Config, vars *variables.Context, jobFilter []string) (
 			Artifacts:    job.Artifacts,
 			Cache:        job.Cache,
 			Needs:        job.Needs,
+			Dependencies: job.Dependencies,
 			AllowFailure: job.AllowFailure,
 			Trigger:      job.Trigger,
 		}
@@ -128,11 +131,32 @@ func (p *Pipeline) Print(w io.Writer) {
 				img = "(default)"
 			}
 			fmt.Fprintf(w, "    - %s [image: %s]\n", term.Bold(j.Name), img)
+			if len(j.Needs) > 0 {
+				fmt.Fprintf(w, "      needs: %s\n", strings.Join(j.Needs, ", "))
+			}
+			if len(j.Dependencies) > 0 {
+				fmt.Fprintf(w, "      dependencies: %s\n", strings.Join(j.Dependencies, ", "))
+			}
+			if len(j.Services) > 0 {
+				fmt.Fprintf(w, "      services: %s\n", serviceNames(j.Services))
+			}
 			for _, line := range j.Script {
 				fmt.Fprintf(w, "        %s %s\n", term.Yellow("$"), line)
 			}
 		}
 	}
+}
+
+func serviceNames(services []parser.Service) string {
+	names := make([]string, 0, len(services))
+	for _, s := range services {
+		n := s.Name
+		if s.Alias != "" {
+			n = fmt.Sprintf("%s (%s)", s.Name, s.Alias)
+		}
+		names = append(names, n)
+	}
+	return strings.Join(names, ", ")
 }
 
 func resolveImage(job *parser.Job, defaults *parser.JobDefaults, vars *variables.Context) string {

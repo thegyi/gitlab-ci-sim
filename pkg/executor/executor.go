@@ -81,7 +81,7 @@ func NewDockerExecutor(runtime string, store, cache *artifacts.Store) (*DockerEx
 }
 
 // Run executes the pipeline as a DAG respecting job needs.
-func (e *DockerExecutor) Run(pipe *pipeline.Pipeline, vars *variables.Context) *Result {
+func (e *DockerExecutor) Run(ctx context.Context, pipe *pipeline.Pipeline, vars *variables.Context) *Result {
 	start := time.Now()
 	result := &Result{Success: true}
 
@@ -96,23 +96,38 @@ func (e *DockerExecutor) Run(pipe *pipeline.Pipeline, vars *variables.Context) *
 	completedSuccess := make(map[string]bool)
 	running := 0
 	done := make(chan *JobResult)
+	canceled := false
 
 	for len(pending) > 0 || running > 0 {
-		var stillPending []*pipeline.PipelineJob
-		for _, job := range pending {
-			if needsMet(job, completedSuccess) {
-				go func(j *pipeline.PipelineJob) {
-					jr := e.runJob(context.Background(), j, vars)
-					done <- jr
-				}(job)
-				running++
-			} else {
-				stillPending = append(stillPending, job)
+		if !canceled && ctx.Err() == nil {
+			var stillPending []*pipeline.PipelineJob
+			for _, job := range pending {
+				if needsMet(job, completedSuccess) {
+					go func(j *pipeline.PipelineJob) {
+						done <- e.runJob(ctx, j, vars)
+					}(job)
+					running++
+				} else {
+					stillPending = append(stillPending, job)
+				}
 			}
+			pending = stillPending
 		}
-		pending = stillPending
 
 		if running == 0 {
+			if canceled {
+				for _, job := range pending {
+					e.mu.Lock()
+					fmt.Fprintf(os.Stdout, "│  Job %s: %s (canceled)\n", job.Name, term.Red("CANCELED"))
+					e.mu.Unlock()
+					result.JobResults = append(result.JobResults, &JobResult{
+						Name:    job.Name,
+						Success: false,
+					})
+				}
+				result.Success = false
+				break
+			}
 			// No jobs are running and no new ones were ready -> dependency issue or cycle.
 			for _, job := range pending {
 				msg := "dependencies not met"
@@ -131,13 +146,18 @@ func (e *DockerExecutor) Run(pipe *pipeline.Pipeline, vars *variables.Context) *
 			break
 		}
 
-		jr := <-done
-		running--
-		result.JobResults = append(result.JobResults, jr)
-		job := byName[jr.Name]
-		effective := jr.Success || (job != nil && job.AllowFailure)
-		completedSuccess[jr.Name] = effective
-		if !effective {
+		select {
+		case jr := <-done:
+			running--
+			result.JobResults = append(result.JobResults, jr)
+			job := byName[jr.Name]
+			effective := jr.Success || (job != nil && job.AllowFailure)
+			completedSuccess[jr.Name] = effective
+			if !effective {
+				result.Success = false
+			}
+		case <-ctx.Done():
+			canceled = true
 			result.Success = false
 		}
 	}
@@ -282,7 +302,11 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 
 	// Restore artifacts from jobs this one depends on.
 	if e.store != nil {
-		for _, need := range job.Needs {
+		artifactSources := job.Needs
+		if len(job.Dependencies) > 0 {
+			artifactSources = job.Dependencies
+		}
+		for _, need := range artifactSources {
 			_ = e.store.Restore(need, workDir)
 		}
 	}
