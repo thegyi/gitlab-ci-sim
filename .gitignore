@@ -1,5 +1,7 @@
-# Built binary
+# Built binaries
 gitlab-ci-sim
+gitlab-ci-sim-*
+*.exe
 
 # Test binaries
 *.test
