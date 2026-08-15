@@ -2,6 +2,7 @@ package variables
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -138,6 +139,7 @@ func Build(branch string, configVars map[string]string, configMasked map[string]
 	ctx.Vars["CI_PROJECT_NAME"] = filepath.Base(repoDir)
 	ctx.Vars["CI_PROJECT_PATH"] = extractProjectPath(remoteURL)
 	ctx.Vars["CI_REPOSITORY_URL"] = remoteURL
+	ctx.Vars["CI_SERVER_URL"] = extractServerURL(remoteURL)
 	ctx.Vars["GITLAB_CI"] = "true"
 
 	for k := range ctx.Vars {
@@ -213,4 +215,20 @@ func extractProjectPath(remoteURL string) string {
 		}
 	}
 	return filepath.Base(url)
+}
+
+func extractServerURL(remoteURL string) string {
+	if strings.HasPrefix(remoteURL, "http://") || strings.HasPrefix(remoteURL, "https://") {
+		u, err := url.Parse(remoteURL)
+		if err == nil {
+			return u.Scheme + "://" + u.Host
+		}
+	}
+	if strings.HasPrefix(remoteURL, "git@") {
+		parts := strings.SplitN(remoteURL, ":", 2)
+		if len(parts) == 2 {
+			return "https://" + strings.TrimPrefix(parts[0], "git@")
+		}
+	}
+	return ""
 }

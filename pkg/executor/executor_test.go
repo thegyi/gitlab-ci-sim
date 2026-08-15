@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/thegyi/gitlab-ci-sim/pkg/parser"
 	"github.com/thegyi/gitlab-ci-sim/pkg/pipeline"
 	"github.com/thegyi/gitlab-ci-sim/pkg/variables"
 )
@@ -57,4 +58,20 @@ func TestRunJobFakeContainer(t *testing.T) {
 		t.Error("expected script output")
 	}
 	fmt.Fprint(os.Stderr, "captured output:\n"+jr.Output)
+}
+
+func TestTriggerPipelineFailsWithoutToken(t *testing.T) {
+	e := &DockerExecutor{runtime: &FakeRuntime{}}
+	ctx := &variables.Context{
+		Vars:     map[string]string{"CI_SERVER_URL": "https://gitlab.example.com"},
+		Declared: map[string]bool{},
+		Masked:   map[string]bool{},
+	}
+	_, err := e.triggerPipeline(ctx, &parser.Trigger{Project: "group/project", Branch: "main"})
+	if err == nil {
+		t.Fatal("expected error without token")
+	}
+	if !strings.Contains(err.Error(), "no GITLAB_TOKEN or CI_JOB_TOKEN") {
+		t.Errorf("expected token error, got %v", err)
+	}
 }

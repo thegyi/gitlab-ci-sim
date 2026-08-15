@@ -71,6 +71,16 @@ Mask sensitive values so they are redacted from the output:
 gitlab-ci-sim run -v AD_PASSWORD=secret,masked -v GITLAB_PASSWORD=secret,masked
 ```
 
+### Run `trigger:` jobs against the real GitLab API
+
+By default `trigger:` jobs are skipped locally. Use `--trigger-mode=gitlab` to create the downstream pipeline:
+
+```bash
+gitlab-ci-sim run --trigger-mode=gitlab build_pr
+```
+
+This requires `CI_SERVER_URL` and either `GITLAB_TOKEN` (private token) or `CI_JOB_TOKEN` to be set.
+
 ### Show the pipeline graph
 
 ```bash

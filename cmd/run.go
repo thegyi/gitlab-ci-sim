@@ -28,6 +28,7 @@ func init() {
 	runCmd.Flags().String("branch", "", "Simulate a specific branch (default: current git branch)")
 	runCmd.Flags().Bool("watch", false, "Re-run the pipeline when .gitlab-ci.yml changes")
 	runCmd.Flags().String("runtime", "docker", "Container runtime to use: docker, podman, or fake")
+	runCmd.Flags().String("trigger-mode", "local", "Trigger handling: local (no-op) or gitlab (call GitLab API)")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -135,6 +136,8 @@ func runJobs(cmd *cobra.Command, args []string) error {
 			if err != nil {
 				return fmt.Errorf("could not create executor: %w", err)
 			}
+			triggerMode, _ := cmd.Flags().GetString("trigger-mode")
+			exec.SetTriggerMode(triggerMode)
 			result := exec.Run(pipe, vars)
 			result.Print(os.Stdout)
 		}

@@ -96,3 +96,19 @@ func TestBuildPrecedence(t *testing.T) {
 		t.Errorf("expected CI_PIPELINE_SOURCE push, got %q", ctx.Vars["CI_PIPELINE_SOURCE"])
 	}
 }
+
+func TestExtractServerURL(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"https://gitlab.example.com/group/project.git", "https://gitlab.example.com"},
+		{"https://gitlab.example.com/group/project", "https://gitlab.example.com"},
+		{"git@gitlab.example.com:group/project.git", "https://gitlab.example.com"},
+	}
+	for _, c := range cases {
+		if got := extractServerURL(c.in); got != c.want {
+			t.Errorf("extractServerURL(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

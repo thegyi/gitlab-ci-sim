@@ -3,8 +3,11 @@ package executor
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -12,6 +15,7 @@ import (
 	"time"
 
 	"github.com/thegyi/gitlab-ci-sim/pkg/artifacts"
+	"github.com/thegyi/gitlab-ci-sim/pkg/parser"
 	"github.com/thegyi/gitlab-ci-sim/pkg/pipeline"
 	"github.com/thegyi/gitlab-ci-sim/pkg/term"
 	"github.com/thegyi/gitlab-ci-sim/pkg/variables"
@@ -55,10 +59,16 @@ func (r *Result) Print(w io.Writer) {
 
 // DockerExecutor runs jobs in a container runtime.
 type DockerExecutor struct {
-	runtime Runtime
-	store   *artifacts.Store
-	cache   *artifacts.Store
-	mu      sync.Mutex
+	runtime     Runtime
+	store       *artifacts.Store
+	cache       *artifacts.Store
+	mu          sync.Mutex
+	triggerMode string
+}
+
+// SetTriggerMode configures how trigger: jobs are handled ("local" or "gitlab").
+func (e *DockerExecutor) SetTriggerMode(mode string) {
+	e.triggerMode = mode
 }
 
 // NewDockerExecutor creates a new container executor with the given runtime.
@@ -154,13 +164,36 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 	if job.Trigger != nil {
 		project := jobCtx.Expand(job.Trigger.Project)
 		branch := jobCtx.Expand(job.Trigger.Branch)
-		fmt.Fprintf(&out, "│  │  %s: trigger to %s (branch: %s) is not executed locally\n", term.Yellow("Note"), project, branch)
+		if e.triggerMode != "gitlab" {
+			fmt.Fprintf(&out, "│  │  %s: trigger to %s (branch: %s) is not executed locally\n", term.Yellow("Note"), project, branch)
+			fmt.Fprintf(&out, "│  └─ Job %s: %s\n", job.Name, term.Green("PASSED"))
+			e.flushOutput(&out)
+			return &JobResult{
+				Name:     job.Name,
+				Success:  true,
+				Output:   "trigger job not executed locally",
+				Duration: time.Since(start),
+			}
+		}
+		msg, err := e.triggerPipeline(jobCtx, job.Trigger)
+		if err != nil {
+			fmt.Fprintf(&out, "│  │  %s: %v\n", term.Red("Error"), err)
+			fmt.Fprintf(&out, "│  └─ Job %s: %s\n", job.Name, term.Red("FAILED"))
+			e.flushOutput(&out)
+			return &JobResult{
+				Name:     job.Name,
+				Success:  false,
+				Output:   err.Error(),
+				Duration: time.Since(start),
+			}
+		}
+		fmt.Fprintf(&out, "│  │  %s: %s\n", term.Green("Trigger"), msg)
 		fmt.Fprintf(&out, "│  └─ Job %s: %s\n", job.Name, term.Green("PASSED"))
 		e.flushOutput(&out)
 		return &JobResult{
 			Name:     job.Name,
 			Success:  true,
-			Output:   "trigger job not executed locally",
+			Output:   msg,
 			Duration: time.Since(start),
 		}
 	}
@@ -427,6 +460,75 @@ func shouldPullCache(policy string) bool {
 
 func shouldPushCache(policy string) bool {
 	return policy == "" || policy == "push" || policy == "pull-push" || policy == "push-pull"
+}
+
+var gitlabHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+func gitlabToken(ctx *variables.Context) (string, string) {
+	if t := ctx.Get("GITLAB_TOKEN"); t != "" {
+		return t, "PRIVATE-TOKEN"
+	}
+	if t := os.Getenv("GITLAB_TOKEN"); t != "" {
+		return t, "PRIVATE-TOKEN"
+	}
+	if t := ctx.Get("CI_JOB_TOKEN"); t != "" {
+		return t, "JOB-TOKEN"
+	}
+	if t := os.Getenv("CI_JOB_TOKEN"); t != "" {
+		return t, "JOB-TOKEN"
+	}
+	return "", ""
+}
+
+func (e *DockerExecutor) triggerPipeline(ctx *variables.Context, t *parser.Trigger) (string, error) {
+	serverURL := ctx.Get("CI_SERVER_URL")
+	if serverURL == "" {
+		serverURL = os.Getenv("CI_SERVER_URL")
+	}
+	if serverURL == "" {
+		return "", fmt.Errorf("CI_SERVER_URL is not set")
+	}
+	project := ctx.Expand(t.Project)
+	if project == "" {
+		return "", fmt.Errorf("trigger project is empty")
+	}
+	ref := ctx.Expand(t.Branch)
+	if ref == "" {
+		ref = ctx.Get("CI_COMMIT_REF_NAME")
+	}
+	if ref == "" {
+		ref = "master"
+	}
+	token, header := gitlabToken(ctx)
+	if token == "" {
+		return "", fmt.Errorf("no GITLAB_TOKEN or CI_JOB_TOKEN available")
+	}
+
+	body := map[string]interface{}{"ref": ref}
+	bodyJSON, _ := json.Marshal(body)
+	apiURL := fmt.Sprintf("%s/api/v4/projects/%s/pipeline", strings.TrimRight(serverURL, "/"), url.PathEscape(project))
+	req, err := http.NewRequest(http.MethodPost, apiURL, bytes.NewReader(bodyJSON))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set(header, token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := gitlabHTTPClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusCreated {
+		return "", fmt.Errorf("gitlab returned %d: %s", resp.StatusCode, string(respBody))
+	}
+	var created struct {
+		ID     int    `json:"id"`
+		WebURL string `json:"web_url"`
+	}
+	_ = json.Unmarshal(respBody, &created)
+	return fmt.Sprintf("triggered downstream pipeline #%d %s", created.ID, created.WebURL), nil
 }
 
 func envListFromContext(jobCtx *variables.Context) []string {
