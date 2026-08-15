@@ -1,10 +1,12 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -135,6 +137,8 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 	start := time.Now()
 	var out strings.Builder
 	fmt.Fprintf(&out, "│  ┌─ Job: %s [image: %s]\n", job.Name, job.Image)
+	e.flushOutput(&out)
+	out.Reset()
 
 	jobCtx := vars.With(job.Variables)
 	if job.Declared != nil {
@@ -235,14 +239,23 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 
 	mainScript := "set -e\n" + buildShellScript(append(job.BeforeScript, job.Script...))
 	envList := envListFromContext(jobCtx)
-	mainExit, mainOut, err := e.runtime.Run(ctx, RunOpts{
+	redact := maskedValues(jobCtx)
+	var mainBuf bytes.Buffer
+	mainSafe := &safeWriter{w: io.MultiWriter(&mainBuf, os.Stdout)}
+	mainRedactorOut := &redactingWriter{dest: mainSafe, values: redact}
+	mainRedactorErr := &redactingWriter{dest: mainSafe, values: redact}
+	mainExit, err := e.runtime.Run(ctx, RunOpts{
 		Image:      job.Image,
 		WorkDir:    workDir,
 		Network:    network,
 		Env:        envList,
 		Script:     mainScript,
 		Entrypoint: "sh",
+		Stdout:     mainRedactorOut,
+		Stderr:     mainRedactorErr,
 	})
+	_ = mainRedactorOut.Flush()
+	_ = mainRedactorErr.Flush()
 	if err != nil {
 		fmt.Fprintf(&out, "│  │  %s: %v\n", term.Red("Error"), err)
 		fmt.Fprintf(&out, "│  └─ Job %s: %s\n", job.Name, term.Red("FAILED"))
@@ -250,27 +263,28 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 		return &JobResult{
 			Name:     job.Name,
 			Success:  false,
-			Output:   mainOut,
+			Output:   mainBuf.String(),
 			Duration: time.Since(start),
 		}
 	}
-	if mainOut != "" {
-		fmt.Fprint(&out, mainOut)
-	}
 
-	afterOut := ""
+	afterBuf := bytes.Buffer{}
 	if len(job.AfterScript) > 0 {
-		_, afterOut, _ = e.runtime.Run(ctx, RunOpts{
+		afterSafe := &safeWriter{w: io.MultiWriter(&afterBuf, os.Stdout)}
+		afterRedactorOut := &redactingWriter{dest: afterSafe, values: redact}
+		afterRedactorErr := &redactingWriter{dest: afterSafe, values: redact}
+		_, _ = e.runtime.Run(ctx, RunOpts{
 			Image:      job.Image,
 			WorkDir:    workDir,
 			Network:    network,
 			Env:        envList,
 			Script:     buildShellScript(job.AfterScript),
 			Entrypoint: "sh",
+			Stdout:     afterRedactorOut,
+			Stderr:     afterRedactorErr,
 		})
-		if afterOut != "" {
-			fmt.Fprint(&out, afterOut)
-		}
+		_ = afterRedactorOut.Flush()
+		_ = afterRedactorErr.Flush()
 	}
 
 	success := mainExit == 0
@@ -298,7 +312,7 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 	result := &JobResult{
 		Name:     job.Name,
 		Success:  success,
-		Output:   mainOut + afterOut,
+		Output:   mainBuf.String() + afterBuf.String(),
 		Duration: time.Since(start),
 	}
 	e.flushOutput(&out)
@@ -309,6 +323,66 @@ func (e *DockerExecutor) flushOutput(out *strings.Builder) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	os.Stdout.WriteString(out.String())
+}
+
+type safeWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *safeWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
+
+type redactingWriter struct {
+	dest   io.Writer
+	values []string
+	buf    []byte
+}
+
+func (r *redactingWriter) Write(p []byte) (int, error) {
+	r.buf = append(r.buf, p...)
+	for {
+		idx := bytes.IndexAny(r.buf, "\n\r")
+		if idx < 0 {
+			break
+		}
+		line := r.buf[:idx+1]
+		r.buf = r.buf[idx+1:]
+		if _, err := r.dest.Write([]byte(r.redact(string(line)))); err != nil {
+			return len(p), err
+		}
+	}
+	return len(p), nil
+}
+
+func (r *redactingWriter) Flush() error {
+	if len(r.buf) > 0 {
+		_, err := r.dest.Write([]byte(r.redact(string(r.buf))))
+		r.buf = r.buf[:0]
+		return err
+	}
+	return nil
+}
+
+func (r *redactingWriter) redact(s string) string {
+	for _, v := range r.values {
+		s = strings.ReplaceAll(s, v, "[MASKED]")
+	}
+	return s
+}
+
+func maskedValues(ctx *variables.Context) []string {
+	var values []string
+	for k, v := range ctx.Vars {
+		if ctx.Masked[k] && v != "" {
+			values = append(values, v)
+		}
+	}
+	sort.Slice(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
+	return values
 }
 
 func shouldSaveArtifacts(exit int, when string) bool {

@@ -2,9 +2,9 @@
 package executor
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 )
@@ -17,29 +17,31 @@ type Volume struct {
 
 // RunOpts holds options for running a one-shot container.
 type RunOpts struct {
-	Image    string
-	WorkDir  string
-	Network  string
-	Env      []string
-	Volumes  []Volume
-	Script   string
+	Image      string
+	WorkDir    string
+	Network    string
+	Env        []string
+	Volumes    []Volume
+	Script     string
 	Entrypoint string
+	Stdout     io.Writer
+	Stderr     io.Writer
 }
 
 // ServiceOpts holds options for running a long-lived service container.
 type ServiceOpts struct {
-	Image    string
-	Network  string
-	Alias    string
-	Env      []string
-	Command  []string
+	Image   string
+	Network string
+	Alias   string
+	Env     []string
+	Command []string
 }
 
 // Runtime abstracts the container runtime used to execute jobs.
 type Runtime interface {
 	CreateNetwork(ctx context.Context, name string) error
 	RemoveNetwork(ctx context.Context, name string) error
-	Run(ctx context.Context, opts RunOpts) (int, string, error)
+	Run(ctx context.Context, opts RunOpts) (int, error)
 	RunDetached(ctx context.Context, opts ServiceOpts) (string, error)
 	Stop(ctx context.Context, id string) error
 }
@@ -85,9 +87,15 @@ func (r *CmdRuntime) RemoveNetwork(ctx context.Context, name string) error {
 	return nil
 }
 
-func (r *CmdRuntime) Run(ctx context.Context, opts RunOpts) (int, string, error) {
+func (r *CmdRuntime) Run(ctx context.Context, opts RunOpts) (int, error) {
 	if opts.Entrypoint == "" {
 		opts.Entrypoint = "sh"
+	}
+	if opts.Stdout == nil {
+		opts.Stdout = io.Discard
+	}
+	if opts.Stderr == nil {
+		opts.Stderr = io.Discard
 	}
 	args := []string{
 		"run", "--rm", "-i",
@@ -108,19 +116,17 @@ func (r *CmdRuntime) Run(ctx context.Context, opts RunOpts) (int, string, error)
 
 	cmd := exec.CommandContext(ctx, r.binary, args...)
 	cmd.Stdin = strings.NewReader(opts.Script)
-
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	cmd.Stdout = opts.Stdout
+	cmd.Stderr = opts.Stderr
 
 	err := cmd.Run()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return exitErr.ExitCode(), out.String(), nil
+			return exitErr.ExitCode(), nil
 		}
-		return -1, out.String(), fmt.Errorf("run: %w", err)
+		return -1, fmt.Errorf("run: %w", err)
 	}
-	return 0, out.String(), nil
+	return 0, nil
 }
 
 func (r *CmdRuntime) RunDetached(ctx context.Context, opts ServiceOpts) (string, error) {
@@ -174,8 +180,11 @@ func (f *FakeRuntime) RemoveNetwork(ctx context.Context, name string) error {
 	return nil
 }
 
-func (f *FakeRuntime) Run(ctx context.Context, opts RunOpts) (int, string, error) {
-	return 0, opts.Script, nil
+func (f *FakeRuntime) Run(ctx context.Context, opts RunOpts) (int, error) {
+	if opts.Stdout != nil {
+		fmt.Fprint(opts.Stdout, opts.Script)
+	}
+	return 0, nil
 }
 
 func (f *FakeRuntime) RunDetached(ctx context.Context, opts ServiceOpts) (string, error) {

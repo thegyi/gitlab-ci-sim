@@ -36,7 +36,7 @@ func (c *Context) IsMasked(name string) bool {
 	return c.Masked[name]
 }
 
-var expandRe = regexp.MustCompile(`\$\{(\w+)\}|\$(\w+)`)
+var expandRe = regexp.MustCompile(`\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)`)
 
 // Expand performs variable substitution in a string.
 func (c *Context) Expand(s string) string {
@@ -56,7 +56,7 @@ func (c *Context) Expand(s string) string {
 
 // With returns a new context with the given variables merged on top.
 func (c *Context) With(m map[string]string) *Context {
-	if m == nil || len(m) == 0 {
+	if len(m) == 0 {
 		return c
 	}
 	n := &Context{
@@ -153,12 +153,20 @@ func Build(branch string, configVars map[string]string, configMasked map[string]
 		}
 	}
 
-	// Apply overrides
+	// Apply overrides; support KEY=VALUE,masked for masking
 	for _, ov := range overrides {
 		parts := strings.SplitN(ov, "=", 2)
 		if len(parts) == 2 {
-			ctx.Vars[parts[0]] = parts[1]
-			ctx.Declared[parts[0]] = true
+			key := parts[0]
+			value := parts[1]
+			masked := false
+			if strings.HasSuffix(value, ",masked") {
+				value = strings.TrimSuffix(value, ",masked")
+				masked = true
+			}
+			ctx.Vars[key] = value
+			ctx.Declared[key] = true
+			ctx.Masked[key] = masked
 		}
 	}
 
