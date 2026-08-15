@@ -6,6 +6,7 @@ import (
 
 	"github.com/thegyi/gitlab-ci-sim/pkg/parser"
 	"github.com/thegyi/gitlab-ci-sim/pkg/rules"
+	"github.com/thegyi/gitlab-ci-sim/pkg/term"
 	"github.com/thegyi/gitlab-ci-sim/pkg/variables"
 )
 
@@ -102,17 +103,17 @@ func Build(config *parser.Config, vars *variables.Context, jobFilter []string) (
 
 // Print outputs the pipeline structure.
 func (p *Pipeline) Print(w io.Writer) {
-	fmt.Fprintf(w, "Pipeline: %d stages\n", len(p.Stages))
+	fmt.Fprintf(w, "%s\n", term.Bold(fmt.Sprintf("Pipeline: %d stages", len(p.Stages))))
 	for _, s := range p.Stages {
-		fmt.Fprintf(w, "\n  Stage: %s (%d jobs)\n", s.Name, len(s.Jobs))
+		fmt.Fprintf(w, "\n  %s\n", term.Cyan(fmt.Sprintf("Stage: %s (%d jobs)", s.Name, len(s.Jobs))))
 		for _, j := range s.Jobs {
 			img := j.Image
 			if img == "" {
 				img = "(default)"
 			}
-			fmt.Fprintf(w, "    - %s [image: %s]\n", j.Name, img)
+			fmt.Fprintf(w, "    - %s [image: %s]\n", term.Bold(j.Name), img)
 			for _, line := range j.Script {
-				fmt.Fprintf(w, "        $ %s\n", line)
+				fmt.Fprintf(w, "        %s %s\n", term.Yellow("$"), line)
 			}
 		}
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/thegyi/gitlab-ci-sim/pkg/artifacts"
 	"github.com/thegyi/gitlab-ci-sim/pkg/parser"
 	"github.com/thegyi/gitlab-ci-sim/pkg/pipeline"
+	"github.com/thegyi/gitlab-ci-sim/pkg/term"
 	"github.com/thegyi/gitlab-ci-sim/pkg/variables"
 )
 
@@ -37,16 +38,16 @@ func (r *Result) Print(w io.Writer) {
 	fmt.Fprintf(w, "\n═══════════════════════════════════════\n")
 	fmt.Fprintf(w, "Pipeline Result: ")
 	if r.Success {
-		fmt.Fprintf(w, "PASSED ✓\n")
+		fmt.Fprintf(w, "%s\n", term.Green("PASSED ✓"))
 	} else {
-		fmt.Fprintf(w, "FAILED ✗\n")
+		fmt.Fprintf(w, "%s\n", term.Red("FAILED ✗"))
 	}
 	fmt.Fprintf(w, "Duration: %s\n", r.Duration.Round(time.Millisecond))
 	fmt.Fprintf(w, "───────────────────────────────────────\n")
 	for _, jr := range r.JobResults {
-		status := "✓"
+		status := term.Green("✓")
 		if !jr.Success {
-			status = "✗"
+			status = term.Red("✗")
 		}
 		fmt.Fprintf(w, "  %s %s (%s)\n", status, jr.Name, jr.Duration.Round(time.Millisecond))
 	}
@@ -106,7 +107,7 @@ func (e *DockerExecutor) Run(pipe *pipeline.Pipeline, vars *variables.Context) *
 			// No jobs are running and no new ones were ready -> dependency issue or cycle.
 			for _, job := range pending {
 				e.mu.Lock()
-				fmt.Fprintf(os.Stdout, "│  Job %s: SKIPPED (dependencies not met)\n", job.Name)
+				fmt.Fprintf(os.Stdout, "│  Job %s: %s (dependencies not met)\n", job.Name, term.Yellow("SKIPPED"))
 				e.mu.Unlock()
 				result.JobResults = append(result.JobResults, &JobResult{
 					Name:    job.Name,
@@ -144,8 +145,8 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 	missing := jobCtx.MissingValues(executionStrings(job)...)
 	if len(missing) > 0 {
 		msg := fmt.Sprintf("undefined/empty variables: %s", strings.Join(missing, ", "))
-		fmt.Fprintf(&out, "│  │  Error: %s\n", msg)
-		fmt.Fprintf(&out, "│  └─ Job %s: FAILED\n", job.Name)
+		fmt.Fprintf(&out, "│  │  %s: %s\n", term.Red("Error"), msg)
+		fmt.Fprintf(&out, "│  └─ Job %s: %s\n", job.Name, term.Red("FAILED"))
 		e.flushOutput(&out)
 		return &JobResult{
 			Name:     job.Name,
@@ -161,8 +162,8 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 	if len(job.Services) > 0 {
 		network = fmt.Sprintf("gitlab-ci-sim-%s-%d", job.Name, time.Now().UnixNano())
 		if err := e.createNetwork(network); err != nil {
-			fmt.Fprintf(&out, "│  │  Error creating network: %v\n", err)
-			fmt.Fprintf(&out, "│  └─ Job %s: FAILED\n", job.Name)
+			fmt.Fprintf(&out, "│  │  %s creating network: %v\n", term.Red("Error"), err)
+			fmt.Fprintf(&out, "│  └─ Job %s: %s\n", job.Name, term.Red("FAILED"))
 			e.flushOutput(&out)
 			return &JobResult{
 				Name:     job.Name,
@@ -174,8 +175,8 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 		for _, svc := range job.Services {
 			id, err := e.startService(ctx, network, svc, jobCtx)
 			if err != nil {
-				fmt.Fprintf(&out, "│  │  Error starting service %s: %v\n", svc.Name, err)
-				fmt.Fprintf(&out, "│  └─ Job %s: FAILED\n", job.Name)
+				fmt.Fprintf(&out, "│  │  %s starting service %s: %v\n", term.Red("Error"), svc.Name, err)
+				fmt.Fprintf(&out, "│  └─ Job %s: %s\n", job.Name, term.Red("FAILED"))
 				for _, sid := range serviceIDs {
 					_ = e.stopContainer(ctx, sid)
 				}
@@ -216,8 +217,8 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 	mainScript := "set -e\n" + buildShellScript(append(job.BeforeScript, job.Script...))
 	mainExit, mainOut, err := e.runContainer(ctx, job, jobCtx, workDir, mainScript, network)
 	if err != nil {
-		fmt.Fprintf(&out, "│  │  Error: %v\n", err)
-		fmt.Fprintf(&out, "│  └─ Job %s: FAILED\n", job.Name)
+		fmt.Fprintf(&out, "│  │  %s: %v\n", term.Red("Error"), err)
+		fmt.Fprintf(&out, "│  └─ Job %s: %s\n", job.Name, term.Red("FAILED"))
 		e.flushOutput(&out)
 		return &JobResult{
 			Name:     job.Name,
@@ -240,9 +241,9 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 
 	success := mainExit == 0
 	if success {
-		fmt.Fprintf(&out, "│  └─ Job %s: PASSED\n", job.Name)
+		fmt.Fprintf(&out, "│  └─ Job %s: %s\n", job.Name, term.Green("PASSED"))
 	} else {
-		fmt.Fprintf(&out, "│  └─ Job %s: FAILED (exit %d)\n", job.Name, mainExit)
+		fmt.Fprintf(&out, "│  └─ Job %s: %s (exit %d)\n", job.Name, term.Red("FAILED"), mainExit)
 	}
 
 	// Save artifacts if the job produced any and the policy matches.
