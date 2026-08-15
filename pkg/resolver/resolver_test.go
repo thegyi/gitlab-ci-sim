@@ -157,3 +157,110 @@ include:
 		t.Error("expected cyclic include error")
 	}
 }
+
+func TestResolveNestedExtends(t *testing.T) {
+	yml := []byte(`
+.base:
+  image: golang:1.21
+
+.template:
+  extends: .base
+  before_script:
+    - echo setup
+
+build_job:
+  extends: .template
+  stage: build
+  script:
+    - go build
+`)
+
+	m := resolveMap(t, yml, "")
+	job := m["build_job"].(map[string]interface{})
+	if job["image"] != "golang:1.21" {
+		t.Errorf("expected image from .base, got %v", job["image"])
+	}
+	before := job["before_script"].([]interface{})
+	if len(before) != 1 || before[0] != "echo setup" {
+		t.Errorf("expected before_script from .template, got %v", before)
+	}
+}
+
+func TestResolveReferenceScalar(t *testing.T) {
+	yml := []byte(`
+stages:
+  - build
+
+.template:
+  variables:
+    ENV: prod
+
+build_job:
+  stage: build
+  script: !reference [.template, variables, ENV]
+`)
+
+	m := resolveMap(t, yml, "")
+	job := m["build_job"].(map[string]interface{})
+	if job["script"] != "prod" {
+		t.Errorf("expected scalar reference 'prod', got %v", job["script"])
+	}
+}
+
+func TestResolveIncludeMergesVariablesAndStages(t *testing.T) {
+	dir := t.TempDir()
+	main := []byte(`
+include:
+  - common.yml
+
+build_job:
+  stage: build
+  script:
+    - echo $DEPLOY_ENV
+`)
+	common := []byte(`
+stages:
+  - build
+  - test
+
+variables:
+  CI_REGISTRY: registry.example.com
+  DEPLOY_ENV: staging
+`)
+	if err := os.WriteFile(filepath.Join(dir, "main.yml"), main, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "common.yml"), common, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "main.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := resolveMap(t, data, dir)
+
+	stages := m["stages"].([]interface{})
+	if len(stages) != 2 {
+		t.Errorf("expected 2 merged stages, got %d", len(stages))
+	}
+	vars := m["variables"].(map[string]interface{})
+	if vars["CI_REGISTRY"] != "registry.example.com" {
+		t.Errorf("expected CI_REGISTRY from include, got %v", vars["CI_REGISTRY"])
+	}
+	if vars["DEPLOY_ENV"] != "staging" {
+		t.Errorf("expected DEPLOY_ENV from include, got %v", vars["DEPLOY_ENV"])
+	}
+}
+
+func TestResolveMissingInclude(t *testing.T) {
+	dir := t.TempDir()
+	yml := []byte(`
+include:
+  - missing.yml
+`)
+	_, err := Resolve(yml, dir)
+	if err == nil {
+		t.Error("expected error for missing include file")
+	}
+}

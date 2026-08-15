@@ -96,11 +96,13 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 
 	missing := jobCtx.MissingValues(executionStrings(job)...)
 	if len(missing) > 0 {
-		fmt.Fprintf(os.Stdout, "│  │  Error: undefined/empty variables: %s\n", strings.Join(missing, ", "))
+		msg := fmt.Sprintf("undefined/empty variables: %s", strings.Join(missing, ", "))
+		fmt.Fprintf(os.Stdout, "│  │  Error: %s\n", msg)
 		fmt.Fprintf(os.Stdout, "│  └─ Job %s: FAILED\n", job.Name)
 		return &JobResult{
 			Name:     job.Name,
 			Success:  false,
+			Output:   msg,
 			Duration: time.Since(start),
 		}
 	}
