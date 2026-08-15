@@ -72,13 +72,15 @@ func Build(config *parser.Config, vars *variables.Context, jobFilter []string) (
 			return nil, fmt.Errorf("job %q references unknown stage %q", name, job.Stage)
 		}
 
+		evalCtx := vars.With(job.Variables).With(res.Variables)
+
 		pj := &PipelineJob{
 			Name:         name,
-			Image:        resolveImage(job, config.Default),
+			Image:        resolveImage(job, config.Default, evalCtx),
 			Script:       job.Script,
 			BeforeScript: resolveBeforeScript(job, config.Default),
 			AfterScript:  resolveAfterScript(job, config.Default),
-			Variables:    rules.MergeVariables(job.Variables, res.Variables),
+			Variables:    evalCtx.Vars,
 			Services:     job.Services,
 			Artifacts:    job.Artifacts,
 			Cache:        job.Cache,
@@ -116,14 +118,16 @@ func (p *Pipeline) Print(w io.Writer) {
 	}
 }
 
-func resolveImage(job *parser.Job, defaults *parser.JobDefaults) string {
+func resolveImage(job *parser.Job, defaults *parser.JobDefaults, vars *variables.Context) string {
+	img := ""
 	if job.Image != "" {
-		return job.Image
+		img = job.Image
+	} else if defaults != nil && defaults.Image != "" {
+		img = defaults.Image
+	} else {
+		img = "alpine:latest"
 	}
-	if defaults != nil && defaults.Image != "" {
-		return defaults.Image
-	}
-	return "alpine:latest"
+	return vars.Expand(img)
 }
 
 func resolveBeforeScript(job *parser.Job, defaults *parser.JobDefaults) []string {
