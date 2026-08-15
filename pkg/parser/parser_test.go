@@ -230,6 +230,168 @@ build_job:
 	}
 }
 
+func TestParseAllJobFields(t *testing.T) {
+	yaml := []byte(`
+stages:
+  - build
+
+build_job:
+  stage: build
+  image: alpine
+  before_script:
+    - echo before
+  after_script:
+    - echo after
+  script:
+    - echo main
+  needs:
+    - prep
+  dependencies:
+    - prep
+  tags:
+    - docker
+  allow_failure: true
+  when: delayed
+  start_in: 5 minutes
+  retry:
+    max: 2
+    when:
+      - script_failure
+  parallel: 2
+  cache:
+    key: v1
+    paths:
+      - .cache
+  artifacts:
+    paths:
+      - out
+    when: on_success
+  services:
+    - name: redis:alpine
+      alias: redis
+`)
+	config, err := Parse(yaml)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	job := config.Jobs["build_job"]
+	if job == nil {
+		t.Fatal("build_job not found")
+	}
+	if job.BeforeScript[0] != "echo before" {
+		t.Errorf("before_script: %v", job.BeforeScript)
+	}
+	if job.AfterScript[0] != "echo after" {
+		t.Errorf("after_script: %v", job.AfterScript)
+	}
+	if len(job.Needs) != 1 || job.Needs[0] != "prep" {
+		t.Errorf("needs: %v", job.Needs)
+	}
+	if len(job.Dependencies) != 1 || job.Dependencies[0] != "prep" {
+		t.Errorf("dependencies: %v", job.Dependencies)
+	}
+	if !job.AllowFailure || job.When != "delayed" || job.StartIn != "5 minutes" {
+		t.Errorf("when/start_in mismatch: %v %v %v", job.AllowFailure, job.When, job.StartIn)
+	}
+	if job.Retry == nil || job.Retry.Max != 2 {
+		t.Errorf("retry: %v", job.Retry)
+	}
+	if job.Parallel == nil || job.Parallel.Scalar != 2 {
+		t.Errorf("parallel: %v", job.Parallel)
+	}
+	if job.Cache == nil || job.Cache.Key != "v1" {
+		t.Errorf("cache: %v", job.Cache)
+	}
+	if job.Artifacts == nil || len(job.Artifacts.Paths) != 1 {
+		t.Errorf("artifacts: %v", job.Artifacts)
+	}
+	if len(job.Services) != 1 || job.Services[0].Name != "redis:alpine" {
+		t.Errorf("services: %v", job.Services)
+	}
+}
+
+func TestParseFileNotFound(t *testing.T) {
+	_, err := ParseFile("/nonexistent/gitlab-ci.yml")
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+}
+
+func TestParseTriggerScalarAndMapping(t *testing.T) {
+	yaml1 := []byte(`
+stages:
+  - build
+trigger_job:
+  stage: build
+  trigger: group/project
+`)
+	config, err := Parse(yaml1)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if config.Jobs["trigger_job"].Trigger.Project != "group/project" {
+		t.Errorf("expected trigger project, got %v", config.Jobs["trigger_job"].Trigger)
+	}
+
+	yaml2 := []byte(`
+stages:
+  - build
+trigger_job:
+  stage: build
+  trigger:
+    project: group/project
+    branch: main
+`)
+	config, err = Parse(yaml2)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if config.Jobs["trigger_job"].Trigger.Branch != "main" {
+		t.Errorf("expected trigger branch main, got %v", config.Jobs["trigger_job"].Trigger.Branch)
+	}
+}
+
+func TestParseRulesAndOnlyExcept(t *testing.T) {
+	yaml := []byte(`
+stages:
+  - build
+
+job1:
+  stage: build
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+      variables:
+        ENV: prod
+  script:
+    - echo
+
+job2:
+  stage: build
+  only:
+    refs:
+      - main
+  except:
+    refs:
+      - develop
+  script:
+    - echo
+`)
+	config, err := Parse(yaml)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if len(config.Jobs["job1"].Rules) != 1 {
+		t.Errorf("rules: %v", config.Jobs["job1"].Rules)
+	}
+	if config.Jobs["job1"].Rules[0].Variables["ENV"] != "prod" {
+		t.Errorf("rule variables: %v", config.Jobs["job1"].Rules[0].Variables)
+	}
+	if config.Jobs["job2"].Only == nil || config.Jobs["job2"].Except == nil {
+		t.Errorf("only/except not parsed")
+	}
+}
+
 func TestParseUnknownStage(t *testing.T) {
 	yaml := []byte(`
 stages:

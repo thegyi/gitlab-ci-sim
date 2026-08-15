@@ -1,6 +1,9 @@
 package resolver
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -262,5 +265,240 @@ include:
 	_, err := Resolve(yml, dir)
 	if err == nil {
 		t.Error("expected error for missing include file")
+	}
+}
+
+func TestResolveIncludeRemote(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`
+stages:
+  - build
+
+.template:
+  image: remote:latest
+`))
+	}))
+	defer server.Close()
+
+	yml := []byte(fmt.Sprintf(`
+include:
+  remote: %s
+
+build_job:
+  stage: build
+  extends: .template
+  script:
+    - echo build
+`, server.URL))
+
+	m := resolveMap(t, yml, "")
+	job := m["build_job"].(map[string]interface{})
+	if job["image"] != "remote:latest" {
+		t.Errorf("expected image from remote, got %v", job["image"])
+	}
+}
+
+func TestResolveIncludeMapping(t *testing.T) {
+	dir := t.TempDir()
+	main := []byte(`
+include:
+  local: common.yml
+
+build_job:
+  stage: build
+  script:
+    - echo
+`)
+	common := []byte(`
+.template:
+  image: common:latest
+`)
+	if err := os.WriteFile(filepath.Join(dir, "main.yml"), main, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "common.yml"), common, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "main.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := resolveMap(t, data, dir)
+	if _, ok := m["include"]; ok {
+		t.Error("include key should be removed")
+	}
+}
+
+func TestResolveInvalidInclude(t *testing.T) {
+	dir := t.TempDir()
+	yml := []byte(`
+include:
+  - 123
+`)
+	_, err := Resolve(yml, dir)
+	if err == nil {
+		t.Error("expected error for invalid include item")
+	}
+}
+
+func TestResolveReferenceInvalid(t *testing.T) {
+	yml := []byte(`
+stages:
+  - build
+
+build:
+  script: !reference [missing, path]
+`)
+	_, err := Resolve(yml, "")
+	if err != nil {
+		t.Fatalf("Resolve should not fail on invalid !reference, got: %v", err)
+	}
+}
+
+func TestProjectURL(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"group/project", "https://gitlab.com/group/project.git"},
+		{"https://gitlab.example.com/group/project", "https://gitlab.example.com/group/project"},
+		{"git@gitlab.com:group/project", "git@gitlab.com:group/project"},
+	}
+	for _, c := range cases {
+		got := projectURL(c.input)
+		if got != c.want {
+			t.Errorf("projectURL(%q) = %q, want %q", c.input, got, c.want)
+		}
+	}
+	os.Setenv("CI_SERVER_URL", "https://selfhosted.example.com")
+	defer os.Unsetenv("CI_SERVER_URL")
+	if got := projectURL("group/project"); got != "https://selfhosted.example.com/group/project.git" {
+		t.Errorf("projectURL with env: %q", got)
+	}
+}
+
+func TestResolveExtendsMissing(t *testing.T) {
+	yml := []byte(`
+stages:
+  - build
+
+build_job:
+  stage: build
+  extends: .missing
+  script:
+    - echo
+`)
+	m := resolveMap(t, yml, "")
+	job := m["build_job"].(map[string]interface{})
+	if _, ok := job["extends"]; ok {
+		t.Error("extends should be removed even if source missing")
+	}
+}
+
+func TestResolveIncludeScalar(t *testing.T) {
+	dir := t.TempDir()
+	main := []byte(`
+include: common.yml
+
+build_job:
+  stage: build
+  extends: .template
+  script:
+    - echo
+`)
+	common := []byte(`
+stages:
+  - build
+
+.template:
+  image: common:latest
+`)
+	if err := os.WriteFile(filepath.Join(dir, "main.yml"), main, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "common.yml"), common, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "main.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := resolveMap(t, data, dir)
+	job := m["build_job"].(map[string]interface{})
+	if job["image"] != "common:latest" {
+		t.Errorf("expected image from scalar include, got %v", job["image"])
+	}
+}
+
+func TestResolveRemoteIncludeError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	yml := []byte(fmt.Sprintf(`
+include:
+  remote: %s
+`, server.URL))
+	_, err := Resolve(yml, "")
+	if err == nil {
+		t.Error("expected error for 404 remote include")
+	}
+}
+
+func TestResolveScalarRoot(t *testing.T) {
+	resolved, err := Resolve([]byte("hello"), "")
+	if err != nil {
+		t.Fatalf("scalar root: %v", err)
+	}
+	if string(resolved) != "hello" {
+		t.Errorf("expected original data, got %q", string(resolved))
+	}
+}
+
+func TestResolveInvalidYAML(t *testing.T) {
+	_, err := Resolve([]byte("}{invalid"), "")
+	if err == nil {
+		t.Error("expected error for invalid YAML")
+	}
+}
+
+func TestResolveEmptyIncludeRef(t *testing.T) {
+	dir := t.TempDir()
+	yml := []byte(`
+include:
+  random: value
+
+build_job:
+  script:
+    - echo
+`)
+	m := resolveMap(t, yml, dir)
+	if _, ok := m["build_job"]; !ok {
+		t.Error("build_job should exist despite empty include ref")
+	}
+}
+
+func TestResolveProjectIncludeWithoutFile(t *testing.T) {
+	dir := t.TempDir()
+	yml := []byte(`
+include:
+  project: group/project
+`)
+	_, err := Resolve(yml, dir)
+	if err == nil {
+		t.Error("expected error for project include without file")
+	}
+}
+
+func TestResolveEmptyDoc(t *testing.T) {
+	resolved, err := Resolve([]byte{}, "")
+	if err != nil {
+		t.Fatalf("empty doc: %v", err)
+	}
+	if len(resolved) != 0 {
+		t.Errorf("expected empty, got %q", resolved)
 	}
 }
