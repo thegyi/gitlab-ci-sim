@@ -35,7 +35,7 @@
 - [x] `artifacts:` passing between jobs
 - [x] `cache:` restore/save
 - [x] `needs:` DAG execution
-- [ ] `services:` linked helper containers
+- [x] `services:` linked helper containers
 - [ ] `include:` remote / project
 - [ ] Colored streaming output
 - [ ] Pipeline graph (`gitlab-ci-sim graph`)
