@@ -105,8 +105,12 @@ func (e *DockerExecutor) Run(pipe *pipeline.Pipeline, vars *variables.Context) *
 		if running == 0 {
 			// No jobs are running and no new ones were ready -> dependency issue or cycle.
 			for _, job := range pending {
+				msg := "dependencies not met"
+				if missing := missingNeeds(job, completedSuccess); len(missing) > 0 {
+					msg = fmt.Sprintf("dependencies not met: %s", strings.Join(missing, ", "))
+				}
 				e.mu.Lock()
-				fmt.Fprintf(os.Stdout, "│  Job %s: %s (dependencies not met)\n", job.Name, term.Yellow("SKIPPED"))
+				fmt.Fprintf(os.Stdout, "│  Job %s: %s (%s)\n", job.Name, term.Yellow("SKIPPED"), msg)
 				e.mu.Unlock()
 				result.JobResults = append(result.JobResults, &JobResult{
 					Name:    job.Name,
@@ -146,6 +150,19 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 	}
 	if job.Masked != nil {
 		jobCtx.Masked = job.Masked
+	}
+	if job.Trigger != nil {
+		project := jobCtx.Expand(job.Trigger.Project)
+		branch := jobCtx.Expand(job.Trigger.Branch)
+		fmt.Fprintf(&out, "│  │  %s: trigger to %s (branch: %s) is not executed locally\n", term.Yellow("Note"), project, branch)
+		fmt.Fprintf(&out, "│  └─ Job %s: %s\n", job.Name, term.Green("PASSED"))
+		e.flushOutput(&out)
+		return &JobResult{
+			Name:     job.Name,
+			Success:  true,
+			Output:   "trigger job not executed locally",
+			Duration: time.Since(start),
+		}
 	}
 	workDir, _ := os.Getwd()
 
@@ -466,4 +483,14 @@ func needsMet(job *pipeline.PipelineJob, completed map[string]bool) bool {
 		}
 	}
 	return true
+}
+
+func missingNeeds(job *pipeline.PipelineJob, completed map[string]bool) []string {
+	var missing []string
+	for _, need := range job.Needs {
+		if !completed[need] {
+			missing = append(missing, need)
+		}
+	}
+	return missing
 }

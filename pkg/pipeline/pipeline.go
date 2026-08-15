@@ -36,6 +36,7 @@ type PipelineJob struct {
 	Cache        *parser.Cache
 	Needs        []string
 	AllowFailure bool
+	Trigger      *parser.Trigger
 }
 
 // Build creates an executable pipeline from the parsed config.
@@ -101,6 +102,7 @@ func Build(config *parser.Config, vars *variables.Context, jobFilter []string) (
 			Cache:        job.Cache,
 			Needs:        job.Needs,
 			AllowFailure: job.AllowFailure,
+			Trigger:      job.Trigger,
 		}
 		stages[idx].Jobs = append(stages[idx].Jobs, pj)
 	}

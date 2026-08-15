@@ -9,6 +9,8 @@ var rootCmd = &cobra.Command{
 	Short: "Simulate GitLab CI pipelines locally",
 	Long: `gitlab-ci-sim parses your .gitlab-ci.yml, resolves includes/extends,
 evaluates rules, and executes jobs in Docker containers on your local machine.`,
+	SilenceUsage:  true,
+	SilenceErrors: true,
 }
 
 func Execute() error {

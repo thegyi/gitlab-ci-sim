@@ -61,6 +61,14 @@ func runJobs(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
+		if len(args) > 0 {
+			for _, name := range args {
+				if _, ok := config.Jobs[name]; !ok {
+					return fmt.Errorf("job %q not found in %s", name, configFile)
+				}
+			}
+		}
+
 		// Build variable context
 		configValues := make(map[string]string)
 		configMasked := make(map[string]bool)
@@ -87,6 +95,19 @@ func runJobs(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("failed to build pipeline: %w", err)
 			}
 			fmt.Fprintf(os.Stderr, "%s: %v\n", term.Red("pipeline error"), err)
+			if err := waitForChange(configFile, &lastMod); err != nil {
+				return err
+			}
+			continue
+		}
+		if len(pipe.Stages) == 0 {
+			if !watch {
+				if len(args) > 0 {
+					return fmt.Errorf("no jobs matched the filter: %v", args)
+				}
+				return fmt.Errorf("no jobs to run")
+			}
+			fmt.Fprintf(os.Stderr, "%s: no jobs to run\n", term.Red("pipeline error"))
 			if err := waitForChange(configFile, &lastMod); err != nil {
 				return err
 			}

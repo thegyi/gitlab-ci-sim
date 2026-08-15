@@ -27,6 +27,24 @@ type JobDefaults struct {
 	Services     []Service `yaml:"services"`
 }
 
+// Trigger represents a trigger: job configuration.
+type Trigger struct {
+	Project  string `yaml:"project"`
+	Strategy string `yaml:"strategy"`
+	Branch   string `yaml:"branch"`
+}
+
+// UnmarshalYAML supports both scalar project paths and full mapping forms.
+func (t *Trigger) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var s string
+	if err := unmarshal(&s); err == nil {
+		t.Project = s
+		return nil
+	}
+	type raw Trigger
+	return unmarshal((*raw)(t))
+}
+
 // Job represents a single CI job.
 type Job struct {
 	Name         string
@@ -48,6 +66,7 @@ type Job struct {
 	When         string              `yaml:"when"`
 	Parallel     interface{}         `yaml:"parallel"`
 	Tags         []string            `yaml:"tags"`
+	Trigger      *Trigger            `yaml:"trigger"`
 }
 
 // Rule represents a single entry in the rules: array.
