@@ -33,7 +33,7 @@
 ## New features
 
 - [x] `artifacts:` passing between jobs
-- [ ] `cache:` restore/save
+- [x] `cache:` restore/save
 - [ ] `needs:` DAG execution
 - [ ] `services:` linked helper containers
 - [ ] `include:` remote / project
