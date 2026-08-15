@@ -79,6 +79,29 @@ func (r *Retry) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	return unmarshal((*raw)(r))
 }
 
+// AllowFailure supports allow_failure: true or allow_failure: { exit_codes: [...] }.
+type AllowFailure struct {
+	Value     bool
+	ExitCodes []int
+}
+
+// UnmarshalYAML supports boolean and mapping forms.
+func (a *AllowFailure) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var b bool
+	if err := unmarshal(&b); err == nil {
+		a.Value = b
+		return nil
+	}
+	var raw struct {
+		ExitCodes []int `yaml:"exit_codes"`
+	}
+	if err := unmarshal(&raw); err == nil {
+		a.ExitCodes = raw.ExitCodes
+		return nil
+	}
+	return fmt.Errorf("allow_failure must be a boolean or a mapping with exit_codes")
+}
+
 // Job represents a single CI job.
 type Job struct {
 	Name         string
@@ -97,7 +120,7 @@ type Job struct {
 	Cache        *Cache              `yaml:"cache"`
 	Services     []Service           `yaml:"services"`
 	Extends      interface{}         `yaml:"extends"`
-	AllowFailure bool                `yaml:"allow_failure"`
+	AllowFailure AllowFailure        `yaml:"allow_failure"`
 	When         string              `yaml:"when"`
 	StartIn      string              `yaml:"start_in"`
 	Parallel     *Parallel           `yaml:"parallel"`

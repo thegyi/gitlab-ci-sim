@@ -33,6 +33,7 @@ type Result struct {
 type JobResult struct {
 	Name     string
 	Success  bool
+	ExitCode int
 	Output   string
 	Duration time.Duration
 }
@@ -152,7 +153,7 @@ func (e *DockerExecutor) Run(ctx context.Context, pipe *pipeline.Pipeline, vars 
 			running--
 			result.JobResults = append(result.JobResults, jr)
 			job := byName[jr.Name]
-			effective := jr.Success || (job != nil && job.AllowFailure)
+			effective := jr.Success || (job != nil && allowFailure(job, jr.ExitCode))
 			completedSuccess[jr.Name] = effective
 			if !effective {
 				result.Success = false
@@ -393,6 +394,7 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 		return &JobResult{
 			Name:     job.Name,
 			Success:  false,
+			ExitCode: -1,
 			Output:   mainBuf.String(),
 			Duration: time.Since(start),
 		}
@@ -442,6 +444,7 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 	result := &JobResult{
 		Name:     job.Name,
 		Success:  success,
+		ExitCode: mainExit,
 		Output:   mainBuf.String() + afterBuf.String(),
 		Duration: time.Since(start),
 	}
@@ -631,6 +634,21 @@ exit 1
 		Stderr:     io.Discard,
 	})
 	return err
+}
+
+func allowFailure(job *pipeline.PipelineJob, exit int) bool {
+	if job == nil {
+		return false
+	}
+	if job.AllowFailure.Value {
+		return true
+	}
+	for _, c := range job.AllowFailure.ExitCodes {
+		if c == exit {
+			return true
+		}
+	}
+	return false
 }
 
 func envListFromContext(jobCtx *variables.Context) []string {

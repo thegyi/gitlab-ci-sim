@@ -224,17 +224,72 @@ func evalOnlyExcept(only, except *parser.OnlyExcept, vars *variables.Context) bo
 	branch := vars.Get("CI_COMMIT_BRANCH")
 	source := vars.Get("CI_PIPELINE_SOURCE")
 
-	if only != nil && len(only.Refs) > 0 {
-		if !matchRefs(only.Refs, branch, source) {
-			return false
-		}
+	if except != nil && exceptMatches(except, branch, source, vars) {
+		return false
 	}
-	if except != nil && len(except.Refs) > 0 {
-		if matchRefs(except.Refs, branch, source) {
-			return false
-		}
+	if only != nil && !onlyMatches(only, branch, source, vars) {
+		return false
 	}
 	return true
+}
+
+// onlyMatches returns true when every present sub-key (refs, variables, changes) matches.
+// Within a sub-key the conditions are ORed (e.g. any ref or any variable matches).
+func onlyMatches(oe *parser.OnlyExcept, branch, source string, vars *variables.Context) bool {
+	if len(oe.Refs) > 0 && !matchRefs(oe.Refs, branch, source) {
+		return false
+	}
+	if len(oe.Variables) > 0 {
+		for _, expr := range oe.Variables {
+			if !evalVariableCondition(expr, vars) {
+				return false
+			}
+		}
+	}
+	if len(oe.Changes) > 0 && !changesMatch(oe.Changes) {
+		return false
+	}
+	return true
+}
+
+// exceptMatches returns true when any present sub-key matches.
+// This means if any ref, variable expression, or file change matches, the job is excluded.
+func exceptMatches(oe *parser.OnlyExcept, branch, source string, vars *variables.Context) bool {
+	if len(oe.Refs) > 0 && matchRefs(oe.Refs, branch, source) {
+		return true
+	}
+	if len(oe.Variables) > 0 {
+		for _, expr := range oe.Variables {
+			if evalVariableCondition(expr, vars) {
+				return true
+			}
+		}
+	}
+	if len(oe.Changes) > 0 && changesMatch(oe.Changes) {
+		return true
+	}
+	return false
+}
+
+func evalVariableCondition(expr string, vars *variables.Context) bool {
+	expr = strings.TrimSpace(expr)
+	// A bare variable reference like VAR, $VAR or ${VAR} is truthy when non-empty.
+	name := expr
+	if strings.HasPrefix(name, "$") {
+		if strings.HasPrefix(name, "${") && strings.HasSuffix(name, "}") {
+			name = name[2 : len(name)-1]
+		} else {
+			name = name[1:]
+		}
+	}
+	if !strings.ContainsAny(name, "=<>!~&|\"") {
+		return vars.Get(name) != ""
+	}
+	ok, err := evalIf(expr, vars)
+	if err != nil {
+		return false
+	}
+	return ok
 }
 
 func matchRefs(refs []string, branch, source string) bool {

@@ -39,7 +39,7 @@ type PipelineJob struct {
 	Cache        *parser.Cache
 	Needs        []string
 	Dependencies []string
-	AllowFailure bool
+	AllowFailure parser.AllowFailure
 	When         string
 	Tags         []string
 	Retry        *parser.Retry

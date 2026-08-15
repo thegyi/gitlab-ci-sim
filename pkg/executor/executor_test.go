@@ -292,7 +292,7 @@ func TestRunPipelineAllowFailure(t *testing.T) {
 			"build": {
 				Stage:        "build",
 				Script:       []string{"exit 1"},
-				AllowFailure: true,
+				AllowFailure: parser.AllowFailure{Value: true},
 			},
 		},
 	}
@@ -308,6 +308,34 @@ func TestRunPipelineAllowFailure(t *testing.T) {
 	result := e.Run(context.Background(), pipe, ctx)
 	if !result.Success {
 		t.Fatalf("expected allow_failure pipeline to be successful, got: %v", result)
+	}
+}
+
+func TestAllowFailureExitCodes(t *testing.T) {
+	rt := &mockRuntime{exit: []int{1}}
+	e := &DockerExecutor{runtime: rt}
+	config := &parser.Config{
+		Stages: []string{"build"},
+		Jobs: map[string]*parser.Job{
+			"build": {
+				Stage:        "build",
+				Script:       []string{"exit 1"},
+				AllowFailure: parser.AllowFailure{ExitCodes: []int{1}},
+			},
+		},
+	}
+	ctx := &variables.Context{
+		Vars:     map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared: map[string]bool{"CI_COMMIT_BRANCH": true},
+		Masked:   map[string]bool{},
+	}
+	pipe, err := pipeline.Build(config, ctx, nil, false, nil)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	result := e.Run(context.Background(), pipe, ctx)
+	if !result.Success {
+		t.Fatalf("expected allow_failure for exit code 1, got: %v", result)
 	}
 }
 

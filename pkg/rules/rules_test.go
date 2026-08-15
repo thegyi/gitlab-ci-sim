@@ -263,6 +263,74 @@ func TestExceptRefs(t *testing.T) {
 	}
 }
 
+func TestOnlyVariables(t *testing.T) {
+	ctx := testContext()
+	job := &parser.Job{
+		Name: "deploy",
+		Only: &parser.OnlyExcept{
+			Refs:      []string{"main"},
+			Variables: []string{`$DEPLOY == "true"`},
+		},
+	}
+	ctx.Vars["DEPLOY"] = "true"
+	res, err := ShouldRun(job, ctx, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Run {
+		t.Error("job should run when ref and variable match")
+	}
+
+	ctx.Vars["DEPLOY"] = "false"
+	res, err = ShouldRun(job, ctx, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Run {
+		t.Error("job should not run when variable does not match")
+	}
+
+	job = &parser.Job{
+		Name: "deploy",
+		Only: &parser.OnlyExcept{
+			Variables: []string{"$DEPLOY"},
+		},
+	}
+	ctx.Vars["DEPLOY"] = "yes"
+	res, err = ShouldRun(job, ctx, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Run {
+		t.Error("bare variable should be truthy when non-empty")
+	}
+}
+
+func TestExceptVariables(t *testing.T) {
+	ctx := testContext()
+	job := &parser.Job{
+		Name:   "deploy",
+		Except: &parser.OnlyExcept{Variables: []string{`$SKIP == "yes"`}},
+	}
+	ctx.Vars["SKIP"] = "yes"
+	res, err := ShouldRun(job, ctx, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Run {
+		t.Error("job should be excluded when except variable matches")
+	}
+
+	ctx.Vars["SKIP"] = "no"
+	res, err = ShouldRun(job, ctx, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Run {
+		t.Error("job should run when except variable does not match")
+	}
+}
+
 func TestMatchRefs(t *testing.T) {
 	cases := []struct {
 		refs   []string

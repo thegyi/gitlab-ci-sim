@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -290,7 +291,7 @@ build_job:
 	if len(job.Dependencies) != 1 || job.Dependencies[0] != "prep" {
 		t.Errorf("dependencies: %v", job.Dependencies)
 	}
-	if !job.AllowFailure || job.When != "delayed" || job.StartIn != "5 minutes" {
+	if !job.AllowFailure.Value || job.When != "delayed" || job.StartIn != "5 minutes" {
 		t.Errorf("when/start_in mismatch: %v %v %v", job.AllowFailure, job.When, job.StartIn)
 	}
 	if job.Retry == nil || job.Retry.Max != 2 {
@@ -348,6 +349,34 @@ trigger_job:
 	}
 	if config.Jobs["trigger_job"].Trigger.Branch != "main" {
 		t.Errorf("expected trigger branch main, got %v", config.Jobs["trigger_job"].Trigger.Branch)
+	}
+}
+
+func TestParseAllowFailureExitCodes(t *testing.T) {
+	yaml := []byte(`
+stages:
+  - build
+
+build_job:
+  stage: build
+  image: alpine
+  allow_failure:
+    exit_codes:
+      - 1
+      - 255
+  script:
+    - echo
+`)
+	config, err := Parse(yaml)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	job := config.Jobs["build_job"]
+	if job == nil {
+		t.Fatal("build_job not found")
+	}
+	if !reflect.DeepEqual(job.AllowFailure.ExitCodes, []int{1, 255}) {
+		t.Errorf("expected exit codes [1, 255], got %v", job.AllowFailure.ExitCodes)
 	}
 }
 
