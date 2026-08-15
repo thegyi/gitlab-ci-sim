@@ -71,6 +71,12 @@ Mask sensitive values so they are redacted from the output:
 gitlab-ci-sim run -v AD_PASSWORD=secret,masked -v GITLAB_PASSWORD=secret,masked
 ```
 
+### Load variables from a `.env` file
+
+```bash
+gitlab-ci-sim run --env-file=.env
+```
+
 ### Run `trigger:` jobs against the real GitLab API
 
 By default `trigger:` jobs are skipped locally. Use `--trigger-mode=gitlab` to create the downstream pipeline:
@@ -131,7 +137,7 @@ gitlab-ci-sim run --branch main
 
 ### Implemented
 - [x] Parse `.gitlab-ci.yml` (stages, jobs, scripts, images, services, triggers, `retry:`)
-- [x] Variable engine from local git state, CLI overrides, masking, and predefined CI variables
+- [x] Variable engine from local git state, CLI overrides, masking, predefined CI variables, and `.env` files
 - [x] `extends:` / `!reference` resolution
 - [x] `include:` (local, remote, project)
 - [x] `rules:` / `only:` / `except:` evaluation
@@ -152,7 +158,7 @@ gitlab-ci-sim run --branch main
 - [ ] `parallel:` / `matrix:` expansion
 - [ ] `when: manual` / `when: delayed` support
 - [ ] Interactive job selection
-- [ ] File-loaded variables (`.env`)
+
 - [ ] Richer linting
 
 ## Notes and limitations

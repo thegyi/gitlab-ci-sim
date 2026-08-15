@@ -29,6 +29,12 @@ func graph(cmd *cobra.Command, args []string) error {
 	configFile, _ := cmd.Flags().GetString("file")
 	branch, _ := cmd.Flags().GetString("branch")
 	varOverrides, _ := cmd.Flags().GetStringSlice("variable")
+	envFile, _ := cmd.Flags().GetString("env-file")
+	envVars, err := loadEnvFile(envFile)
+	if err != nil {
+		return err
+	}
+	varOverrides = append(varOverrides, envVars...)
 
 	config, err := parser.ParseFile(configFile)
 	if err != nil {
