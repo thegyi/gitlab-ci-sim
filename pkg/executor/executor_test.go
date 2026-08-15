@@ -174,6 +174,90 @@ func TestParseStartIn(t *testing.T) {
 	}
 }
 
+func TestRunJobDelayed(t *testing.T) {
+	rt := &mockRuntime{exit: []int{0}}
+	e := &DockerExecutor{runtime: rt}
+	job := &pipeline.PipelineJob{
+		Name:      "delayed_job",
+		Image:     "alpine:latest",
+		Script:    []string{"echo delayed"},
+		When:      "delayed",
+		StartIn:   "100ms",
+		Variables: map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared:  map[string]bool{"CI_COMMIT_BRANCH": true},
+	}
+	vars := &variables.Context{
+		Vars:     map[string]string{"CI": "true"},
+		Declared: map[string]bool{"CI": true},
+	}
+	start := time.Now()
+	jr := e.runJob(context.Background(), job, vars)
+	if !jr.Success {
+		t.Fatalf("expected success, got: %s", jr.Output)
+	}
+	if time.Since(start) < 100*time.Millisecond {
+		t.Fatal("expected delayed job to wait for start_in")
+	}
+}
+
+func TestRunJobWithService(t *testing.T) {
+	rt := &mockRuntime{exit: []int{0, 0}}
+	e := &DockerExecutor{runtime: rt}
+	job := &pipeline.PipelineJob{
+		Name:   "with_service",
+		Image:  "alpine:latest",
+		Script: []string{"echo main"},
+		Services: []parser.Service{
+			{Name: "redis:alpine", Alias: "redis"},
+		},
+		Variables: map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared:  map[string]bool{"CI_COMMIT_BRANCH": true},
+	}
+	vars := &variables.Context{
+		Vars:     map[string]string{"CI": "true"},
+		Declared: map[string]bool{"CI": true},
+	}
+	jr := e.runJob(context.Background(), job, vars)
+	if !jr.Success {
+		t.Fatalf("expected success, got: %s", jr.Output)
+	}
+	if rt.idx < 2 {
+		t.Fatalf("expected at least 2 runtime calls, got %d", rt.idx)
+	}
+}
+
+func TestRunPipeline(t *testing.T) {
+	config := &parser.Config{
+		Stages: []string{"build"},
+		Jobs: map[string]*parser.Job{
+			"build": {
+				Stage:  "build",
+				Script: []string{"echo build"},
+			},
+		},
+	}
+	ctx := &variables.Context{
+		Vars:     map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared: map[string]bool{"CI_COMMIT_BRANCH": true},
+		Masked:   map[string]bool{},
+	}
+	pipe, err := pipeline.Build(config, ctx, nil, false, nil)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	e, err := NewDockerExecutor("fake", nil, nil)
+	if err != nil {
+		t.Fatalf("NewDockerExecutor failed: %v", err)
+	}
+	result := e.Run(context.Background(), pipe, ctx)
+	if !result.Success {
+		t.Fatalf("expected pipeline success, got: %v", result)
+	}
+	if len(result.JobResults) != 1 || result.JobResults[0].Name != "build" {
+		t.Fatalf("expected one build job result, got %v", result.JobResults)
+	}
+}
+
 func TestTriggerPipelineFailsWithoutToken(t *testing.T) {
 	e := &DockerExecutor{runtime: &FakeRuntime{}}
 	ctx := &variables.Context{
