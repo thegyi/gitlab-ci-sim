@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thegyi/gitlab-ci-sim/pkg/parser"
 	"github.com/thegyi/gitlab-ci-sim/pkg/pipeline"
@@ -58,6 +59,119 @@ func TestRunJobFakeContainer(t *testing.T) {
 		t.Error("expected script output")
 	}
 	fmt.Fprint(os.Stderr, "captured output:\n"+jr.Output)
+}
+
+type mockRuntime struct {
+	calls []RunOpts
+	exit  []int
+	err   []error
+	idx   int
+}
+
+func (m *mockRuntime) CreateNetwork(ctx context.Context, name string) error { return nil }
+func (m *mockRuntime) RemoveNetwork(ctx context.Context, name string) error { return nil }
+func (m *mockRuntime) Stop(ctx context.Context, id string) error            { return nil }
+func (m *mockRuntime) RunDetached(ctx context.Context, opts ServiceOpts) (string, error) {
+	return "service-id", nil
+}
+func (m *mockRuntime) Run(ctx context.Context, opts RunOpts) (int, error) {
+	m.calls = append(m.calls, opts)
+	i := m.idx
+	if i >= len(m.exit) {
+		i = len(m.exit) - 1
+	}
+	exit := m.exit[i]
+	var err error
+	if i < len(m.err) {
+		err = m.err[i]
+	}
+	m.idx++
+	return exit, err
+}
+
+func TestRunJobRetriesAndSucceeds(t *testing.T) {
+	rt := &mockRuntime{exit: []int{1, 0}}
+	e := &DockerExecutor{runtime: rt}
+	job := &pipeline.PipelineJob{
+		Name:      "retry_job",
+		Image:     "alpine:latest",
+		Script:    []string{"echo test"},
+		Retry:     &parser.Retry{Max: 2},
+		Variables: map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared:  map[string]bool{"CI_COMMIT_BRANCH": true},
+	}
+	vars := &variables.Context{
+		Vars:     map[string]string{"CI": "true"},
+		Declared: map[string]bool{"CI": true},
+	}
+	jr := e.runJob(context.Background(), job, vars)
+	if !jr.Success {
+		t.Fatalf("expected success after retry, got: %s", jr.Output)
+	}
+	if rt.idx != 2 {
+		t.Fatalf("expected 2 runtime calls, got %d", rt.idx)
+	}
+}
+
+func TestRunJobRetryExhausted(t *testing.T) {
+	rt := &mockRuntime{exit: []int{1, 1, 1}}
+	e := &DockerExecutor{runtime: rt}
+	job := &pipeline.PipelineJob{
+		Name:      "retry_job",
+		Image:     "alpine:latest",
+		Script:    []string{"echo test"},
+		Retry:     &parser.Retry{Max: 2},
+		Variables: map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared:  map[string]bool{"CI_COMMIT_BRANCH": true},
+	}
+	vars := &variables.Context{
+		Vars:     map[string]string{"CI": "true"},
+		Declared: map[string]bool{"CI": true},
+	}
+	jr := e.runJob(context.Background(), job, vars)
+	if jr.Success {
+		t.Fatal("expected failure after exhausting retries")
+	}
+	if rt.idx != 3 {
+		t.Fatalf("expected 3 runtime calls, got %d", rt.idx)
+	}
+}
+
+func TestIsRetryable(t *testing.T) {
+	ctx := context.Background()
+	if !isRetryable(nil, 1, nil, ctx) {
+		t.Error("expected non-zero exit with default when to be retryable")
+	}
+	if isRetryable(nil, 0, nil, ctx) {
+		t.Error("expected zero exit with default when not to be retryable")
+	}
+	if !isRetryable(fmt.Errorf("boom"), 0, []string{"runner_system_failure"}, ctx) {
+		t.Error("expected runner_system_failure to be retryable on error")
+	}
+	if isRetryable(nil, 1, []string{"runner_system_failure"}, ctx) {
+		t.Error("expected runner_system_failure not to be retryable on non-zero exit without error")
+	}
+}
+
+func TestParseStartIn(t *testing.T) {
+	cases := []struct {
+		in   string
+		want time.Duration
+	}{
+		{"5s", 5 * time.Second},
+		{"10 minutes", 10 * time.Minute},
+		{"1h", time.Hour},
+		{"2 days", 48 * time.Hour},
+	}
+	for _, c := range cases {
+		got, err := parseStartIn(c.in)
+		if err != nil {
+			t.Fatalf("parseStartIn(%q) error: %v", c.in, err)
+		}
+		if got != c.want {
+			t.Fatalf("parseStartIn(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
 }
 
 func TestTriggerPipelineFailsWithoutToken(t *testing.T) {

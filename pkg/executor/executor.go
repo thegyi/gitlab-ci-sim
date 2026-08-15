@@ -683,7 +683,7 @@ func allPipelineJobs(p *pipeline.Pipeline) []*pipeline.PipelineJob {
 func parseStartIn(s string) (time.Duration, error) {
 	s = strings.ToLower(strings.TrimSpace(s))
 	s = strings.ReplaceAll(s, " ", "")
-	s = strings.NewReplacer("seconds", "s", "second", "s", "minutes", "m", "minute", "m", "hours", "h", "hour", "h").Replace(s)
+	s = strings.NewReplacer("seconds", "s", "second", "s", "minutes", "m", "minute", "m", "hours", "h", "hour", "h", "days", "d", "day", "d").Replace(s)
 	if strings.HasSuffix(s, "d") {
 		n, err := strconv.Atoi(strings.TrimSuffix(s, "d"))
 		if err != nil {

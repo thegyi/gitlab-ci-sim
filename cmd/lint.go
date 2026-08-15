@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/thegyi/gitlab-ci-sim/pkg/parser"
@@ -101,7 +102,7 @@ func lintConfig(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "%s: %s\n", term.Red("error"), e)
 	}
 	if len(errs) > 0 {
-		return fmt.Errorf("%d lint error(s) found", len(errs))
+		return fmt.Errorf("%d lint error(s) found:\n%s", len(errs), strings.Join(errs, "\n"))
 	}
 
 	fmt.Fprintf(os.Stdout, "Configuration is valid: %d jobs in %d stages\n",
