@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/thegyi/gitlab-ci-sim/pkg/artifacts"
 	"github.com/thegyi/gitlab-ci-sim/pkg/executor"
 	"github.com/thegyi/gitlab-ci-sim/pkg/parser"
 	"github.com/thegyi/gitlab-ci-sim/pkg/pipeline"
+	"github.com/thegyi/gitlab-ci-sim/pkg/term"
 	"github.com/thegyi/gitlab-ci-sim/pkg/variables"
 )
 
@@ -24,57 +26,111 @@ in Docker containers using the configuration from .gitlab-ci.yml.`,
 func init() {
 	runCmd.Flags().Bool("dry-run", false, "Show what would be executed without running")
 	runCmd.Flags().String("branch", "", "Simulate a specific branch (default: current git branch)")
+	runCmd.Flags().Bool("watch", false, "Re-run the pipeline when .gitlab-ci.yml changes")
 	rootCmd.AddCommand(runCmd)
 }
 
 func runJobs(cmd *cobra.Command, args []string) error {
 	configFile, _ := cmd.Flags().GetString("file")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	watch, _ := cmd.Flags().GetBool("watch")
 	branch, _ := cmd.Flags().GetString("branch")
 	varOverrides, _ := cmd.Flags().GetStringSlice("variable")
 
-	// Parse the CI configuration
-	config, err := parser.ParseFile(configFile)
-	if err != nil {
-		return fmt.Errorf("failed to parse %s: %w", configFile, err)
+	lastMod := time.Time{}
+	if watch {
+		info, err := os.Stat(configFile)
+		if err != nil {
+			return fmt.Errorf("failed to stat %s: %w", configFile, err)
+		}
+		lastMod = info.ModTime()
 	}
 
-	// Build variable context
-	vars, err := variables.Build(branch, config.Variables, varOverrides)
-	if err != nil {
-		return fmt.Errorf("failed to build variables: %w", err)
-	}
+	for {
+		// Parse the CI configuration
+		config, err := parser.ParseFile(configFile)
+		if err != nil {
+			if !watch {
+				return fmt.Errorf("failed to parse %s: %w", configFile, err)
+			}
+			fmt.Fprintf(os.Stderr, "%s: %v\n", term.Red("parse error"), err)
+			if err := waitForChange(configFile, &lastMod); err != nil {
+				return err
+			}
+			continue
+		}
 
-	// Build the pipeline (resolve stages, needs, rules)
-	pipe, err := pipeline.Build(config, vars, args)
-	if err != nil {
-		return fmt.Errorf("failed to build pipeline: %w", err)
-	}
+		// Build variable context
+		vars, err := variables.Build(branch, config.Variables, varOverrides)
+		if err != nil {
+			if !watch {
+				return fmt.Errorf("failed to build variables: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "%s: %v\n", term.Red("variable error"), err)
+			if err := waitForChange(configFile, &lastMod); err != nil {
+				return err
+			}
+			continue
+		}
 
-	if dryRun {
-		pipe.Print(os.Stdout)
-		return nil
-	}
+		// Build the pipeline (resolve stages, needs, rules)
+		pipe, err := pipeline.Build(config, vars, args)
+		if err != nil {
+			if !watch {
+				return fmt.Errorf("failed to build pipeline: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "%s: %v\n", term.Red("pipeline error"), err)
+			if err := waitForChange(configFile, &lastMod); err != nil {
+				return err
+			}
+			continue
+		}
 
-	// Execute the pipeline
-	cacheDir, err := os.UserCacheDir()
-	if err != nil {
-		return fmt.Errorf("could not determine cache dir: %w", err)
-	}
-	artifactStore, err := artifacts.NewStore(filepath.Join(cacheDir, "gitlab-ci-sim", "artifacts"))
-	if err != nil {
-		return fmt.Errorf("could not create artifact store: %w", err)
-	}
-	cacheStore, err := artifacts.NewStore(filepath.Join(cacheDir, "gitlab-ci-sim", "cache"))
-	if err != nil {
-		return fmt.Errorf("could not create cache store: %w", err)
-	}
-	exec := executor.NewDockerExecutor(artifactStore, cacheStore)
-	result := exec.Run(pipe, vars)
+		if dryRun {
+			pipe.Print(os.Stdout)
+		} else {
+			// Execute the pipeline
+			cacheDir, err := os.UserCacheDir()
+			if err != nil {
+				return fmt.Errorf("could not determine cache dir: %w", err)
+			}
+			artifactStore, err := artifacts.NewStore(filepath.Join(cacheDir, "gitlab-ci-sim", "artifacts"))
+			if err != nil {
+				return fmt.Errorf("could not create artifact store: %w", err)
+			}
+			cacheStore, err := artifacts.NewStore(filepath.Join(cacheDir, "gitlab-ci-sim", "cache"))
+			if err != nil {
+				return fmt.Errorf("could not create cache store: %w", err)
+			}
+			exec := executor.NewDockerExecutor(artifactStore, cacheStore)
+			result := exec.Run(pipe, vars)
+			result.Print(os.Stdout)
+		}
 
-	result.Print(os.Stdout)
-	if !result.Success {
-		return fmt.Errorf("pipeline failed")
+		if !watch {
+			if dryRun {
+				return nil
+			}
+			return nil
+		}
+
+		fmt.Fprintf(os.Stdout, "%s\n", term.Yellow("Watching for changes... (press Ctrl-C to stop)"))
+		if err := waitForChange(configFile, &lastMod); err != nil {
+			return err
+		}
 	}
-	return nil
+}
+
+func waitForChange(path string, lastMod *time.Time) error {
+	for {
+		time.Sleep(2 * time.Second)
+		info, err := os.Stat(path)
+		if err != nil {
+			return fmt.Errorf("failed to stat %s: %w", path, err)
+		}
+		if info.ModTime().After(*lastMod) {
+			*lastMod = info.ModTime()
+			return nil
+		}
+	}
 }
