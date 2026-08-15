@@ -27,6 +27,16 @@ cd gitlab-ci-sim
 go build -o gitlab-ci-sim .
 ```
 
+## Dependencies
+
+- Go 1.22 or later
+- Docker Engine (accessible via the `docker` CLI)
+- Git
+- Go modules used by this project:
+  - `github.com/spf13/cobra` — CLI framework
+  - `gopkg.in/yaml.v3` — YAML parsing
+  - `github.com/Knetic/govaluate` — `rules:` `if:` expression evaluation
+
 ## Usage
 
 ### Run the full pipeline
