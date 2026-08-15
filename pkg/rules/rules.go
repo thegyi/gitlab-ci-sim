@@ -23,7 +23,11 @@ type Result struct {
 
 // ShouldRun evaluates a job's rules/only/except/when to decide if it runs.
 func ShouldRun(job *parser.Job, vars *variables.Context, allowManual bool) (*Result, error) {
-	evalCtx := vars.With(job.Variables)
+	jobValues := make(map[string]string)
+	for k, v := range job.Variables {
+		jobValues[k] = v.Value
+	}
+	evalCtx := vars.With(jobValues)
 
 	if len(job.Rules) > 0 {
 		for _, r := range job.Rules {

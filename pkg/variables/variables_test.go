@@ -78,7 +78,7 @@ func TestBuildPrecedence(t *testing.T) {
 	ctx, err := Build("main", map[string]string{
 		"CI_PROJECT_DIR": "/custom",
 		"FROM_CONFIG":    "config",
-	}, []string{"FROM_CONFIG=override"})
+	}, map[string]bool{"CI_PROJECT_DIR": true}, []string{"FROM_CONFIG=override"})
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}

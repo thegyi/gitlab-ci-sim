@@ -35,7 +35,13 @@ func graph(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to parse %s: %w", configFile, err)
 	}
 
-	vars, err := variables.Build(branch, config.Variables, varOverrides)
+	configValues := make(map[string]string)
+	configMasked := make(map[string]bool)
+	for k, v := range config.Variables {
+		configValues[k] = v.Value
+		configMasked[k] = v.Masked
+	}
+	vars, err := variables.Build(branch, configValues, configMasked, varOverrides)
 	if err != nil {
 		return fmt.Errorf("failed to build variables: %w", err)
 	}

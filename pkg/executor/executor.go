@@ -140,6 +140,12 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 	fmt.Fprintf(&out, "│  ┌─ Job: %s [image: %s]\n", job.Name, job.Image)
 
 	jobCtx := vars.With(job.Variables)
+	if job.Declared != nil {
+		jobCtx.Declared = job.Declared
+	}
+	if job.Masked != nil {
+		jobCtx.Masked = job.Masked
+	}
 	workDir, _ := os.Getwd()
 
 	missing := jobCtx.MissingValues(executionStrings(job)...)
@@ -316,6 +322,9 @@ func (e *DockerExecutor) runContainer(ctx context.Context, job *pipeline.Pipelin
 		args = append(args, "--network", network)
 	}
 	for k, v := range jobCtx.Vars {
+		if !jobCtx.Declared[k] {
+			continue
+		}
 		args = append(args, "-e", k+"="+v)
 	}
 	args = append(args, job.Image)
@@ -411,6 +420,9 @@ func (e *DockerExecutor) startService(ctx context.Context, network string, svc p
 		"--network-alias", alias,
 	}
 	for k, v := range jobCtx.Vars {
+		if !jobCtx.Declared[k] {
+			continue
+		}
 		args = append(args, "-e", k+"="+v)
 	}
 	args = append(args, image)

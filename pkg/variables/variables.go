@@ -11,7 +11,9 @@ import (
 
 // Context holds all CI variables available during pipeline execution.
 type Context struct {
-	Vars map[string]string
+	Vars     map[string]string
+	Declared map[string]bool
+	Masked   map[string]bool
 }
 
 // Get retrieves a variable value by name.
@@ -22,6 +24,16 @@ func (c *Context) Get(name string) string {
 // Set sets a variable value.
 func (c *Context) Set(name, value string) {
 	c.Vars[name] = value
+}
+
+// IsDeclared reports whether the variable is intended to be passed to jobs.
+func (c *Context) IsDeclared(name string) bool {
+	return c.Declared[name]
+}
+
+// IsMasked reports whether the variable is marked masked.
+func (c *Context) IsMasked(name string) bool {
+	return c.Masked[name]
 }
 
 var expandRe = regexp.MustCompile(`\$\{(\w+)\}|\$(\w+)`)
@@ -48,13 +60,22 @@ func (c *Context) With(m map[string]string) *Context {
 		return c
 	}
 	n := &Context{
-		Vars: make(map[string]string, len(c.Vars)+len(m)),
+		Vars:     make(map[string]string, len(c.Vars)+len(m)),
+		Declared: make(map[string]bool, len(c.Declared)+len(m)),
+		Masked:   make(map[string]bool, len(c.Masked)+len(m)),
 	}
 	for k, v := range c.Vars {
 		n.Vars[k] = v
 	}
+	for k, v := range c.Declared {
+		n.Declared[k] = v
+	}
+	for k, v := range c.Masked {
+		n.Masked[k] = v
+	}
 	for k, v := range m {
 		n.Vars[k] = v
+		n.Declared[k] = true
 	}
 	return n
 }
@@ -83,9 +104,11 @@ func (c *Context) MissingValues(ss ...string) []string {
 }
 
 // Build creates a variable context from the local git state, top-level CI variables, and overrides.
-func Build(branch string, configVars map[string]string, overrides []string) (*Context, error) {
+func Build(branch string, configVars map[string]string, configMasked map[string]bool, overrides []string) (*Context, error) {
 	ctx := &Context{
-		Vars: make(map[string]string),
+		Vars:     make(map[string]string),
+		Declared: make(map[string]bool),
+		Masked:   make(map[string]bool),
 	}
 
 	// Git-derived variables
@@ -117,9 +140,17 @@ func Build(branch string, configVars map[string]string, overrides []string) (*Co
 	ctx.Vars["CI_REPOSITORY_URL"] = remoteURL
 	ctx.Vars["GITLAB_CI"] = "true"
 
+	for k := range ctx.Vars {
+		ctx.Declared[k] = true
+	}
+
 	// Apply top-level CI variables from the config (lower priority than job and CLI)
 	for k, v := range configVars {
 		ctx.Vars[k] = v
+		ctx.Declared[k] = true
+		if configMasked[k] {
+			ctx.Masked[k] = true
+		}
 	}
 
 	// Apply overrides
@@ -127,6 +158,7 @@ func Build(branch string, configVars map[string]string, overrides []string) (*Co
 		parts := strings.SplitN(ov, "=", 2)
 		if len(parts) == 2 {
 			ctx.Vars[parts[0]] = parts[1]
+			ctx.Declared[parts[0]] = true
 		}
 	}
 

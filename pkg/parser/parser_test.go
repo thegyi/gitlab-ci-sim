@@ -197,11 +197,11 @@ build_job:
 	if config.Variables == nil {
 		t.Fatal("variables not parsed")
 	}
-	if config.Variables["CI_REGISTRY"] != "registry.example.com" {
-		t.Errorf("expected CI_REGISTRY, got %q", config.Variables["CI_REGISTRY"])
+	if config.Variables["CI_REGISTRY"].Value != "registry.example.com" {
+		t.Errorf("expected CI_REGISTRY, got %q", config.Variables["CI_REGISTRY"].Value)
 	}
-	if config.Variables["DEPLOY_ENV"] != "staging" {
-		t.Errorf("expected DEPLOY_ENV staging, got %q", config.Variables["DEPLOY_ENV"])
+	if config.Variables["DEPLOY_ENV"].Value != "staging" {
+		t.Errorf("expected DEPLOY_ENV staging, got %q", config.Variables["DEPLOY_ENV"].Value)
 	}
 	if config.Workflow == nil || len(config.Workflow.Rules) != 1 {
 		t.Fatalf("workflow rules not parsed: %v", config.Workflow)

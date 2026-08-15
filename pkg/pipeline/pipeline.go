@@ -29,6 +29,8 @@ type PipelineJob struct {
 	BeforeScript []string
 	AfterScript  []string
 	Variables    map[string]string
+	Declared     map[string]bool
+	Masked       map[string]bool
 	Services     []parser.Service
 	Artifacts    *parser.Artifacts
 	Cache        *parser.Cache
@@ -73,7 +75,17 @@ func Build(config *parser.Config, vars *variables.Context, jobFilter []string) (
 			return nil, fmt.Errorf("job %q references unknown stage %q", name, job.Stage)
 		}
 
-		evalCtx := vars.With(job.Variables).With(res.Variables)
+		jobValues := make(map[string]string)
+		for k, v := range job.Variables {
+			jobValues[k] = v.Value
+		}
+		evalCtx := vars.With(jobValues)
+		for k, v := range job.Variables {
+			evalCtx.Masked[k] = v.Masked
+		}
+		if res.Variables != nil {
+			evalCtx = evalCtx.With(res.Variables)
+		}
 
 		pj := &PipelineJob{
 			Name:         name,
@@ -82,6 +94,8 @@ func Build(config *parser.Config, vars *variables.Context, jobFilter []string) (
 			BeforeScript: resolveBeforeScript(job, config.Default),
 			AfterScript:  resolveAfterScript(job, config.Default),
 			Variables:    evalCtx.Vars,
+			Declared:     evalCtx.Declared,
+			Masked:       evalCtx.Masked,
 			Services:     job.Services,
 			Artifacts:    job.Artifacts,
 			Cache:        job.Cache,

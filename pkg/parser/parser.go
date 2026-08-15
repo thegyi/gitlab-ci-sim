@@ -16,7 +16,7 @@ type Config struct {
 	Jobs      map[string]*Job
 	Default   *JobDefaults
 	Workflow  *Workflow
-	Variables map[string]string
+	Variables map[string]Variable
 }
 
 // JobDefaults represents the `default:` section.
@@ -30,24 +30,24 @@ type JobDefaults struct {
 // Job represents a single CI job.
 type Job struct {
 	Name         string
-	Stage        string            `yaml:"stage"`
-	Image        string            `yaml:"image"`
-	Script       []string          `yaml:"script"`
-	BeforeScript []string          `yaml:"before_script"`
-	AfterScript  []string          `yaml:"after_script"`
-	Variables    map[string]string `yaml:"variables"`
-	Rules        []Rule            `yaml:"rules"`
-	Only         *OnlyExcept       `yaml:"only"`
-	Except       *OnlyExcept       `yaml:"except"`
-	Needs        []string          `yaml:"needs"`
-	Artifacts    *Artifacts        `yaml:"artifacts"`
-	Cache        *Cache            `yaml:"cache"`
-	Services     []Service         `yaml:"services"`
-	Extends      interface{}       `yaml:"extends"`
-	AllowFailure bool              `yaml:"allow_failure"`
-	When         string            `yaml:"when"`
-	Parallel     interface{}       `yaml:"parallel"`
-	Tags         []string          `yaml:"tags"`
+	Stage        string              `yaml:"stage"`
+	Image        string              `yaml:"image"`
+	Script       []string            `yaml:"script"`
+	BeforeScript []string            `yaml:"before_script"`
+	AfterScript  []string            `yaml:"after_script"`
+	Variables    map[string]Variable `yaml:"variables"`
+	Rules        []Rule              `yaml:"rules"`
+	Only         *OnlyExcept         `yaml:"only"`
+	Except       *OnlyExcept         `yaml:"except"`
+	Needs        []string            `yaml:"needs"`
+	Artifacts    *Artifacts          `yaml:"artifacts"`
+	Cache        *Cache              `yaml:"cache"`
+	Services     []Service           `yaml:"services"`
+	Extends      interface{}         `yaml:"extends"`
+	AllowFailure bool                `yaml:"allow_failure"`
+	When         string              `yaml:"when"`
+	Parallel     interface{}         `yaml:"parallel"`
+	Tags         []string            `yaml:"tags"`
 }
 
 // Rule represents a single entry in the rules: array.
@@ -64,6 +64,23 @@ type OnlyExcept struct {
 	Refs      []string `yaml:"refs"`
 	Variables []string `yaml:"variables"`
 	Changes   []string `yaml:"changes"`
+}
+
+// Variable represents a CI variable and its attributes.
+type Variable struct {
+	Value  string `yaml:"value"`
+	Masked bool   `yaml:"masked"`
+}
+
+// UnmarshalYAML supports both scalar strings and mapping forms.
+func (v *Variable) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var s string
+	if err := unmarshal(&s); err == nil {
+		v.Value = s
+		return nil
+	}
+	type raw Variable
+	return unmarshal((*raw)(v))
 }
 
 // Artifacts represents the artifacts: configuration.
@@ -144,17 +161,9 @@ func Parse(data []byte) (*Config, error) {
 	// Extract top-level variables
 	if v, ok := raw["variables"]; ok {
 		if vm, ok := v.(map[string]interface{}); ok {
-			config.Variables = make(map[string]string)
-			for k, val := range vm {
-				switch t := val.(type) {
-				case string:
-					config.Variables[k] = t
-				case map[string]interface{}:
-					if vv, ok := t["value"].(string); ok {
-						config.Variables[k] = vv
-					}
-				}
-			}
+			data, _ := yaml.Marshal(vm)
+			config.Variables = make(map[string]Variable)
+			_ = yaml.Unmarshal(data, &config.Variables)
 		}
 	}
 
