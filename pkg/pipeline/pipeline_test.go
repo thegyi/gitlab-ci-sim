@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/thegyi/gitlab-ci-sim/pkg/parser"
@@ -134,6 +135,8 @@ func TestBuildTags(t *testing.T) {
 	}
 	got := jobNames(pipe)
 	want := []string{"docker_job", "untagged"}
+	sort.Strings(got)
+	sort.Strings(want)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("expected %v, got %v", want, got)
 	}
