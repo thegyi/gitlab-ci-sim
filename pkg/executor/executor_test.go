@@ -3,6 +3,8 @@ package executor
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -225,6 +227,117 @@ func TestRunJobRetryOnError(t *testing.T) {
 	}
 	if rt.idx != 2 {
 		t.Fatalf("expected 2 runtime calls, got %d", rt.idx)
+	}
+}
+
+type blockedRuntime struct {
+	delay time.Duration
+}
+
+func (b *blockedRuntime) CreateNetwork(ctx context.Context, name string) error { return nil }
+func (b *blockedRuntime) RemoveNetwork(ctx context.Context, name string) error { return nil }
+func (b *blockedRuntime) Stop(ctx context.Context, id string) error            { return nil }
+func (b *blockedRuntime) RunDetached(ctx context.Context, opts ServiceOpts) (string, error) {
+	return "service-id", nil
+}
+func (b *blockedRuntime) Run(ctx context.Context, opts RunOpts) (int, error) {
+	select {
+	case <-ctx.Done():
+		return -1, ctx.Err()
+	case <-time.After(b.delay):
+	}
+	return 0, nil
+}
+
+func TestRunPipelineContextCancel(t *testing.T) {
+	e := &DockerExecutor{runtime: &blockedRuntime{delay: 500 * time.Millisecond}}
+	config := &parser.Config{
+		Stages: []string{"build"},
+		Jobs: map[string]*parser.Job{
+			"build": {
+				Stage:  "build",
+				Script: []string{"echo build"},
+			},
+		},
+	}
+	ctx := &variables.Context{
+		Vars:     map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared: map[string]bool{"CI_COMMIT_BRANCH": true},
+		Masked:   map[string]bool{},
+	}
+	pipe, err := pipeline.Build(config, ctx, nil, false, nil)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	runCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	result := e.Run(runCtx, pipe, ctx)
+	if result.Success {
+		t.Fatal("expected canceled pipeline to fail")
+	}
+	if len(result.JobResults) != 1 {
+		t.Fatalf("expected 1 job result, got %d", len(result.JobResults))
+	}
+	if result.JobResults[0].Success {
+		t.Fatal("expected canceled job to fail")
+	}
+}
+
+func TestRunPipelineAllowFailure(t *testing.T) {
+	rt := &mockRuntime{exit: []int{1}}
+	e := &DockerExecutor{runtime: rt}
+	config := &parser.Config{
+		Stages: []string{"build"},
+		Jobs: map[string]*parser.Job{
+			"build": {
+				Stage:        "build",
+				Script:       []string{"exit 1"},
+				AllowFailure: true,
+			},
+		},
+	}
+	ctx := &variables.Context{
+		Vars:     map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared: map[string]bool{"CI_COMMIT_BRANCH": true},
+		Masked:   map[string]bool{},
+	}
+	pipe, err := pipeline.Build(config, ctx, nil, false, nil)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	result := e.Run(context.Background(), pipe, ctx)
+	if !result.Success {
+		t.Fatalf("expected allow_failure pipeline to be successful, got: %v", result)
+	}
+}
+
+func TestRunPipelineMissingNeeds(t *testing.T) {
+	e := &DockerExecutor{runtime: &FakeRuntime{}}
+	config := &parser.Config{
+		Stages: []string{"build"},
+		Jobs: map[string]*parser.Job{
+			"orphan": {
+				Stage:  "build",
+				Script: []string{"echo"},
+				Needs:  []string{"does_not_exist"},
+			},
+		},
+	}
+	ctx := &variables.Context{
+		Vars:     map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared: map[string]bool{"CI_COMMIT_BRANCH": true},
+		Masked:   map[string]bool{},
+	}
+	pipe, err := pipeline.Build(config, ctx, nil, false, nil)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	result := e.Run(context.Background(), pipe, ctx)
+	if result.Success {
+		t.Fatal("expected pipeline with missing needs to fail")
+	}
+	if len(result.JobResults) != 1 {
+		t.Fatalf("expected 1 job result, got %d", len(result.JobResults))
 	}
 }
 
@@ -582,6 +695,40 @@ func TestRunJobTriggerLocal(t *testing.T) {
 	}
 	if !strings.Contains(jr.Output, "not executed locally") {
 		t.Error("expected 'not executed locally' message")
+	}
+}
+
+func TestRunJobGitlabTrigger(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"id": 42, "web_url": "https://gitlab.example.com/pipeline/42"}`))
+	}))
+	defer server.Close()
+
+	rt := &FakeRuntime{}
+	e := &DockerExecutor{runtime: rt, triggerMode: "gitlab"}
+	job := &pipeline.PipelineJob{
+		Name:    "trigger",
+		Trigger: &parser.Trigger{Project: "group%2Fproject", Branch: "main"},
+		Variables: map[string]string{
+			"CI_SERVER_URL": server.URL,
+			"GITLAB_TOKEN":  "secret",
+		},
+		Declared: map[string]bool{
+			"CI_SERVER_URL": true,
+			"GITLAB_TOKEN":  true,
+		},
+	}
+	vars := &variables.Context{
+		Vars:     map[string]string{"CI_COMMIT_REF_NAME": "main"},
+		Declared: map[string]bool{"CI_COMMIT_REF_NAME": true},
+	}
+	jr := e.runJob(context.Background(), job, vars)
+	if !jr.Success {
+		t.Fatalf("expected gitlab trigger to pass, got: %s", jr.Output)
+	}
+	if !strings.Contains(jr.Output, "#42") {
+		t.Errorf("expected pipeline number in output, got %s", jr.Output)
 	}
 }
 
