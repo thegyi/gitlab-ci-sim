@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/thegyi/gitlab-ci-sim/pkg/artifacts"
+	"github.com/thegyi/gitlab-ci-sim/pkg/parser"
 	"github.com/thegyi/gitlab-ci-sim/pkg/pipeline"
 	"github.com/thegyi/gitlab-ci-sim/pkg/variables"
 )
@@ -154,6 +155,51 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 		}
 	}
 
+	// Create a dedicated Docker network for this job and its services.
+	network := ""
+	var serviceIDs []string
+	if len(job.Services) > 0 {
+		network = fmt.Sprintf("gitlab-ci-sim-%s-%d", job.Name, time.Now().UnixNano())
+		if err := e.createNetwork(network); err != nil {
+			fmt.Fprintf(&out, "│  │  Error creating network: %v\n", err)
+			fmt.Fprintf(&out, "│  └─ Job %s: FAILED\n", job.Name)
+			e.flushOutput(&out)
+			return &JobResult{
+				Name:     job.Name,
+				Success:  false,
+				Output:   err.Error(),
+				Duration: time.Since(start),
+			}
+		}
+		for _, svc := range job.Services {
+			id, err := e.startService(ctx, network, svc, jobCtx)
+			if err != nil {
+				fmt.Fprintf(&out, "│  │  Error starting service %s: %v\n", svc.Name, err)
+				fmt.Fprintf(&out, "│  └─ Job %s: FAILED\n", job.Name)
+				for _, sid := range serviceIDs {
+					_ = e.stopContainer(ctx, sid)
+				}
+				_ = e.removeNetwork(ctx, network)
+				e.flushOutput(&out)
+				return &JobResult{
+					Name:     job.Name,
+					Success:  false,
+					Output:   err.Error(),
+					Duration: time.Since(start),
+				}
+			}
+			serviceIDs = append(serviceIDs, id)
+		}
+		defer func() {
+			for _, sid := range serviceIDs {
+				_ = e.stopContainer(ctx, sid)
+			}
+			_ = e.removeNetwork(ctx, network)
+		}()
+		// Give Docker DNS a moment to propagate the network aliases.
+		time.Sleep(1 * time.Second)
+	}
+
 	// Restore cache if configured.
 	if e.cache != nil && job.Cache != nil && shouldPullCache(job.Cache.Policy) {
 		key := jobCtx.Expand(cacheKey(job.Cache.Key))
@@ -168,7 +214,7 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 	}
 
 	mainScript := "set -e\n" + buildShellScript(append(job.BeforeScript, job.Script...))
-	mainExit, mainOut, err := e.runContainer(ctx, job, jobCtx, workDir, mainScript)
+	mainExit, mainOut, err := e.runContainer(ctx, job, jobCtx, workDir, mainScript, network)
 	if err != nil {
 		fmt.Fprintf(&out, "│  │  Error: %v\n", err)
 		fmt.Fprintf(&out, "│  └─ Job %s: FAILED\n", job.Name)
@@ -186,7 +232,7 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 
 	afterOut := ""
 	if len(job.AfterScript) > 0 {
-		_, afterOut, _ = e.runContainer(ctx, job, jobCtx, workDir, buildShellScript(job.AfterScript))
+		_, afterOut, _ = e.runContainer(ctx, job, jobCtx, workDir, buildShellScript(job.AfterScript), network)
 		if afterOut != "" {
 			fmt.Fprint(&out, afterOut)
 		}
@@ -258,12 +304,15 @@ func shouldPushCache(policy string) bool {
 }
 
 // runContainer runs a Docker container with the given script on stdin.
-func (e *DockerExecutor) runContainer(ctx context.Context, job *pipeline.PipelineJob, jobCtx *variables.Context, workDir, script string) (int, string, error) {
+func (e *DockerExecutor) runContainer(ctx context.Context, job *pipeline.PipelineJob, jobCtx *variables.Context, workDir, script, network string) (int, string, error) {
 	args := []string{
 		"run", "--rm", "-i",
 		"-v", workDir + ":/builds/project",
 		"-w", "/builds/project",
 		"--entrypoint", "sh",
+	}
+	if network != "" {
+		args = append(args, "--network", network)
 	}
 	for k, v := range jobCtx.Vars {
 		args = append(args, "-e", k+"="+v)
@@ -330,4 +379,56 @@ func needsMet(job *pipeline.PipelineJob, completed map[string]bool) bool {
 		}
 	}
 	return true
+}
+
+func (e *DockerExecutor) createNetwork(name string) error {
+	cmd := exec.Command(e.client, "network", "create", name)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("docker network create: %s: %w", string(out), err)
+	}
+	return nil
+}
+
+func (e *DockerExecutor) removeNetwork(ctx context.Context, name string) error {
+	cmd := exec.CommandContext(ctx, e.client, "network", "rm", name)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("docker network rm: %s: %w", string(out), err)
+	}
+	return nil
+}
+
+func (e *DockerExecutor) startService(ctx context.Context, network string, svc parser.Service, jobCtx *variables.Context) (string, error) {
+	image := jobCtx.Expand(svc.Name)
+	alias := jobCtx.Expand(svc.Alias)
+	if alias == "" {
+		alias = "service"
+	}
+
+	args := []string{
+		"run", "-d", "--rm",
+		"--network", network,
+		"--network-alias", alias,
+	}
+	for k, v := range jobCtx.Vars {
+		args = append(args, "-e", k+"="+v)
+	}
+	args = append(args, image)
+	for _, c := range svc.Command {
+		args = append(args, jobCtx.Expand(c))
+	}
+
+	cmd := exec.CommandContext(ctx, e.client, args...)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("docker run service %s: %w", image, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func (e *DockerExecutor) stopContainer(ctx context.Context, id string) error {
+	cmd := exec.CommandContext(ctx, e.client, "stop", "-t", "2", id)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("docker stop: %s: %w", string(out), err)
+	}
+	return nil
 }
