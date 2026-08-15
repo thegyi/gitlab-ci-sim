@@ -38,6 +38,7 @@ type PipelineJob struct {
 	Needs        []string
 	Dependencies []string
 	AllowFailure bool
+	Retry        *parser.Retry
 	Trigger      *parser.Trigger
 }
 
@@ -105,6 +106,7 @@ func Build(config *parser.Config, vars *variables.Context, jobFilter []string) (
 			Needs:        job.Needs,
 			Dependencies: job.Dependencies,
 			AllowFailure: job.AllowFailure,
+			Retry:        job.Retry,
 			Trigger:      job.Trigger,
 		}
 		stages[idx].Jobs = append(stages[idx].Jobs, pj)

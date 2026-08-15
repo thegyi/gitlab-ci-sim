@@ -318,20 +318,49 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 	mainSafe := &safeWriter{w: io.MultiWriter(&mainBuf, os.Stdout)}
 	mainRedactorOut := &redactingWriter{dest: mainSafe, values: redact}
 	mainRedactorErr := &redactingWriter{dest: mainSafe, values: redact}
-	mainExit, err := e.runtime.Run(ctx, RunOpts{
-		Image:      job.Image,
-		WorkDir:    workDir,
-		Network:    network,
-		Env:        envList,
-		Script:     mainScript,
-		Entrypoint: "sh",
-		Stdout:     mainRedactorOut,
-		Stderr:     mainRedactorErr,
-	})
+
+	maxAttempts := 0
+	if job.Retry != nil {
+		maxAttempts = job.Retry.Max
+	}
+	retryWhen := []string{"script_failure"}
+	if job.Retry != nil && len(job.Retry.When) > 0 {
+		retryWhen = job.Retry.When
+	}
+
+	mainExit := -1
+	var mainErr error
+	for attempt := 0; attempt <= maxAttempts; attempt++ {
+		if maxAttempts > 0 {
+			fmt.Fprintf(&out, "│  │  %s: attempt %d/%d\n", term.Yellow("Info"), attempt+1, maxAttempts+1)
+			e.flushOutput(&out)
+			out.Reset()
+		}
+		mainExit, mainErr = e.runtime.Run(ctx, RunOpts{
+			Image:      job.Image,
+			WorkDir:    workDir,
+			Network:    network,
+			Env:        envList,
+			Script:     mainScript,
+			Entrypoint: "sh",
+			Stdout:     mainRedactorOut,
+			Stderr:     mainRedactorErr,
+		})
+		_ = mainRedactorOut.Flush()
+		_ = mainRedactorErr.Flush()
+		if mainErr == nil && mainExit == 0 {
+			break
+		}
+		if attempt < maxAttempts && isRetryable(mainErr, mainExit, retryWhen, ctx) {
+			continue
+		}
+		break
+	}
 	_ = mainRedactorOut.Flush()
 	_ = mainRedactorErr.Flush()
-	if err != nil {
-		fmt.Fprintf(&out, "│  │  %s: %v\n", term.Red("Error"), err)
+
+	if mainErr != nil {
+		fmt.Fprintf(&out, "│  │  %s: %v\n", term.Red("Error"), mainErr)
 		fmt.Fprintf(&out, "│  └─ Job %s: %s\n", job.Name, term.Red("FAILED"))
 		e.flushOutput(&out)
 		return &JobResult{
@@ -619,4 +648,32 @@ func missingNeeds(job *pipeline.PipelineJob, completed map[string]bool) []string
 		}
 	}
 	return missing
+}
+
+func isRetryable(err error, exit int, when []string, ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	if len(when) == 0 {
+		return err == nil && exit != 0
+	}
+	for _, w := range when {
+		switch w {
+		case "always":
+			return true
+		case "script_failure":
+			if err == nil && exit != 0 {
+				return true
+			}
+		case "runner_system_failure", "api_failure", "stuck_or_timeout_failure", "job_execution_timeout":
+			if err != nil {
+				return true
+			}
+		case "unknown_failure":
+			if exit != 0 || err != nil {
+				return true
+			}
+		}
+	}
+	return false
 }

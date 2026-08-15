@@ -45,6 +45,23 @@ func (t *Trigger) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	return unmarshal((*raw)(t))
 }
 
+// Retry represents a retry: job configuration.
+type Retry struct {
+	Max  int      `yaml:"max"`
+	When []string `yaml:"when"`
+}
+
+// UnmarshalYAML supports both scalar counts and full mapping forms.
+func (r *Retry) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var n int
+	if err := unmarshal(&n); err == nil {
+		r.Max = n
+		return nil
+	}
+	type raw Retry
+	return unmarshal((*raw)(r))
+}
+
 // Job represents a single CI job.
 type Job struct {
 	Name         string
@@ -67,6 +84,7 @@ type Job struct {
 	When         string              `yaml:"when"`
 	Parallel     interface{}         `yaml:"parallel"`
 	Tags         []string            `yaml:"tags"`
+	Retry        *Retry              `yaml:"retry"`
 	Trigger      *Trigger            `yaml:"trigger"`
 }
 

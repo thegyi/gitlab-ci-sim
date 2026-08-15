@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // Context holds all CI variables available during pipeline execution.
@@ -126,9 +127,14 @@ func Build(branch string, configVars map[string]string, configMasked map[string]
 	repoDir, _ := os.Getwd()
 
 	// Predefined GitLab CI variables
+	projectPath := extractProjectPath(remoteURL)
+	serverURL := extractServerURL(remoteURL)
+	serverHost := extractServerHost(serverURL)
+	namespace, rootNamespace := extractNamespace(projectPath)
 	ctx.Vars["CI"] = "true"
 	ctx.Vars["CI_SERVER"] = "yes"
 	ctx.Vars["CI_PIPELINE_SOURCE"] = "push"
+	ctx.Vars["CI_PIPELINE_ID"] = fmt.Sprintf("%d", time.Now().UnixNano())
 	ctx.Vars["CI_COMMIT_BRANCH"] = branch
 	ctx.Vars["CI_COMMIT_REF_NAME"] = branch
 	ctx.Vars["CI_COMMIT_REF_SLUG"] = slugify(branch)
@@ -137,9 +143,15 @@ func Build(branch string, configVars map[string]string, configMasked map[string]
 	ctx.Vars["CI_DEFAULT_BRANCH"] = getDefaultBranch()
 	ctx.Vars["CI_PROJECT_DIR"] = "/builds/project"
 	ctx.Vars["CI_PROJECT_NAME"] = filepath.Base(repoDir)
-	ctx.Vars["CI_PROJECT_PATH"] = extractProjectPath(remoteURL)
+	ctx.Vars["CI_PROJECT_NAMESPACE"] = namespace
+	ctx.Vars["CI_PROJECT_ROOT_NAMESPACE"] = rootNamespace
+	ctx.Vars["CI_PROJECT_PATH"] = projectPath
+	ctx.Vars["CI_PROJECT_URL"] = fmt.Sprintf("%s/%s", strings.TrimRight(serverURL, "/"), projectPath)
 	ctx.Vars["CI_REPOSITORY_URL"] = remoteURL
-	ctx.Vars["CI_SERVER_URL"] = extractServerURL(remoteURL)
+	ctx.Vars["CI_SERVER_URL"] = serverURL
+	ctx.Vars["CI_SERVER_HOST"] = serverHost
+	ctx.Vars["CI_REGISTRY"] = defaultRegistry(serverHost)
+	ctx.Vars["CI_REGISTRY_IMAGE"] = fmt.Sprintf("%s/%s", defaultRegistry(serverHost), projectPath)
 	ctx.Vars["GITLAB_CI"] = "true"
 
 	for k := range ctx.Vars {
@@ -231,4 +243,37 @@ func extractServerURL(remoteURL string) string {
 		}
 	}
 	return ""
+}
+
+func extractServerHost(serverURL string) string {
+	if strings.HasPrefix(serverURL, "http://") || strings.HasPrefix(serverURL, "https://") {
+		u, err := url.Parse(serverURL)
+		if err == nil {
+			return u.Hostname()
+		}
+	}
+	if strings.HasPrefix(serverURL, "https://") {
+		return strings.TrimPrefix(strings.TrimPrefix(serverURL, "https://"), "http://")
+	}
+	return serverURL
+}
+
+func extractNamespace(projectPath string) (namespace, root string) {
+	parts := strings.Split(projectPath, "/")
+	if len(parts) == 0 {
+		return "", ""
+	}
+	if len(parts) == 1 {
+		return "", ""
+	}
+	root = parts[0]
+	namespace = strings.Join(parts[:len(parts)-1], "/")
+	return namespace, root
+}
+
+func defaultRegistry(serverHost string) string {
+	if serverHost == "" {
+		return ""
+	}
+	return "registry." + serverHost
 }

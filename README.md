@@ -5,7 +5,7 @@ configuration, and execute jobs in Docker containers on your machine.
 
 ## Features
 
-- Parse `.gitlab-ci.yml` with stages, jobs, variables, services, triggers
+- Parse `.gitlab-ci.yml` with stages, jobs, variables, services, triggers, `retry:`
 - Resolve `extends:`, `include:` (local/remote/project), `rules:`, `only:`/`except:`
 - Execute jobs in Docker or Podman containers via a pluggable runtime
 - Artifact and cache passing between jobs
@@ -130,33 +130,34 @@ gitlab-ci-sim run --branch main
 ## Roadmap
 
 ### Implemented
-- [x] Parse `.gitlab-ci.yml` (stages, jobs, scripts, images, services, triggers)
-- [x] Variable engine from local git state, CLI overrides, and masking
+- [x] Parse `.gitlab-ci.yml` (stages, jobs, scripts, images, services, triggers, `retry:`)
+- [x] Variable engine from local git state, CLI overrides, masking, and predefined CI variables
 - [x] `extends:` / `!reference` resolution
 - [x] `include:` (local, remote, project)
 - [x] `rules:` / `only:` / `except:` evaluation
+- [x] `workflow:` rules
 - [x] Real Docker / Podman / fake container execution via pluggable runtime
 - [x] `services:` support (linked containers with network aliases)
 - [x] `artifacts:` and `cache:` passing between jobs
-- [x] `needs:` DAG execution (parallel across stages when dependencies are met)
+- [x] `needs:` / `dependencies:` DAG execution and artifact passing
+- [x] `retry:` on failed jobs
 - [x] Dry-run mode and pipeline graph (`gitlab-ci-sim graph`)
 - [x] Watch mode (re-run on config changes)
+- [x] Graceful shutdown on `SIGINT`/`SIGTERM`
+- [x] `--list` to preview jobs
 - [x] Colored terminal output
 - [x] Config linting/validation
 
 ### Planned
-- [ ] `workflow:` rules
 - [ ] `parallel:` / `matrix:` expansion
 - [ ] `when: manual` / `when: delayed` support
-- [ ] Real downstream `trigger:` via GitLab API
-- [ ] Graceful shutdown on `SIGINT`/`SIGTERM`
 - [ ] Interactive job selection
 - [ ] File-loaded variables (`.env`)
-- [ ] More predefined CI variables and richer linting
+- [ ] Richer linting
 
 ## Notes and limitations
 
-- `trigger:` jobs are recognised but **not executed locally**. They are reported as passed so the local simulation can continue, but they do not create a real downstream GitLab pipeline. Use the GitLab API or a real runner to trigger downstream pipelines.
+- `trigger:` jobs are skipped locally by default. Use `--trigger-mode=gitlab` to create the downstream pipeline via the GitLab API (requires `CI_SERVER_URL` and `GITLAB_TOKEN` or `CI_JOB_TOKEN`).
 - Some advanced GitLab features are not yet implemented (see Roadmap below).
 
 ## Development
