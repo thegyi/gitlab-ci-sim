@@ -151,7 +151,7 @@ gitlab-ci-sim run --branch main
 - [x] `rules:` / `only:` / `except:` evaluation
 - [x] `workflow:` rules
 - [x] Real Docker / Podman / fake container execution via pluggable runtime
-- [x] `services:` support (linked containers with network aliases)
+- [x] `services:` support (linked containers with network aliases and health checks)
 - [x] `artifacts:` and `cache:` passing between jobs
 - [x] `needs:` / `dependencies:` DAG execution and artifact passing
 - [x] `retry:` on failed jobs
@@ -167,7 +167,6 @@ gitlab-ci-sim run --branch main
 - [x] Config linting/validation
 
 ### Planned
-- [ ] Service health checks
 - [ ] Docker-in-Docker / privileged containers
 
 ## Notes and limitations

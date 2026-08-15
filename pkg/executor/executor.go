@@ -291,8 +291,24 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 			}
 			_ = e.runtime.RemoveNetwork(ctx, network)
 		}()
-		// Give Docker DNS a moment to propagate the network aliases.
-		time.Sleep(1 * time.Second)
+		// Wait for each service to be resolvable on the network.
+		for _, svc := range job.Services {
+			alias := svc.Alias
+			if alias == "" {
+				alias = "service"
+			}
+			if err := e.waitForService(ctx, network, alias, workDir); err != nil {
+				fmt.Fprintf(&out, "│  │  %s: service %s not ready: %v\n", term.Red("Error"), svc.Name, err)
+				fmt.Fprintf(&out, "│  └─ Job %s: %s\n", job.Name, term.Red("FAILED"))
+				e.flushOutput(&out)
+				return &JobResult{
+					Name:     job.Name,
+					Success:  false,
+					Output:   err.Error(),
+					Duration: time.Since(start),
+				}
+			}
+		}
 	}
 
 	// Restore cache if configured.
@@ -593,6 +609,28 @@ func (e *DockerExecutor) triggerPipeline(ctx *variables.Context, t *parser.Trigg
 	}
 	_ = json.Unmarshal(respBody, &created)
 	return fmt.Sprintf("triggered downstream pipeline #%d %s", created.ID, created.WebURL), nil
+}
+
+func (e *DockerExecutor) waitForService(ctx context.Context, network, alias, workDir string) error {
+	script := fmt.Sprintf(`
+for i in $(seq 1 30); do
+  if nslookup %s >/dev/null 2>&1; then
+    exit 0
+  fi
+  sleep 1
+done
+exit 1
+`, alias)
+	_, err := e.runtime.Run(ctx, RunOpts{
+		Image:      "busybox:musl",
+		WorkDir:    workDir,
+		Network:    network,
+		Script:     script,
+		Entrypoint: "sh",
+		Stdout:     io.Discard,
+		Stderr:     io.Discard,
+	})
+	return err
 }
 
 func envListFromContext(jobCtx *variables.Context) []string {
