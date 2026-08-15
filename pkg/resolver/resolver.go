@@ -3,9 +3,13 @@ package resolver
 import (
 	"bytes"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -65,36 +69,66 @@ func resolveIncludes(root *yaml.Node, baseDir string, seen map[string]bool) erro
 	}
 
 	for _, inc := range includes {
-		if inc.local == "" {
+		var data []byte
+		var childBase string
+		var err error
+		key := inc.local
+
+		switch {
+		case inc.local != "":
+			key = inc.local
+			if !filepath.IsAbs(inc.local) {
+				if baseDir == "" {
+					baseDir = "."
+				}
+				inc.local = filepath.Join(baseDir, inc.local)
+			}
+			abs, err := filepath.Abs(inc.local)
+			if err != nil {
+				return fmt.Errorf("include %q: %w", inc.local, err)
+			}
+			if seen[abs] {
+				return fmt.Errorf("cyclic include: %s", abs)
+			}
+			seen[abs] = true
+			data, err = os.ReadFile(abs)
+			if err != nil {
+				return fmt.Errorf("reading include %q: %w", inc.local, err)
+			}
+			childBase = filepath.Dir(abs)
+		case inc.remote != "":
+			key = inc.remote
+			if seen[inc.remote] {
+				return fmt.Errorf("cyclic include: %s", inc.remote)
+			}
+			seen[inc.remote] = true
+			data, childBase, err = fetchRemote(inc.remote)
+			if err != nil {
+				return fmt.Errorf("remote include %q: %w", inc.remote, err)
+			}
+		case inc.project != "":
+			key = inc.project + "?" + inc.ref + "#" + inc.file
+			if seen[key] {
+				return fmt.Errorf("cyclic include: %s", key)
+			}
+			seen[key] = true
+			data, childBase, err = fetchProject(inc.project, inc.ref, inc.file)
+			if err != nil {
+				return fmt.Errorf("project include %q: %w", inc.project, err)
+			}
+			defer os.RemoveAll(childBase)
+		default:
 			continue
 		}
-		if !filepath.IsAbs(inc.local) {
-			if baseDir == "" {
-				baseDir = "."
-			}
-			inc.local = filepath.Join(baseDir, inc.local)
-		}
-		abs, err := filepath.Abs(inc.local)
-		if err != nil {
-			return fmt.Errorf("include %q: %w", inc.local, err)
-		}
-		if seen[abs] {
-			return fmt.Errorf("cyclic include: %s", abs)
-		}
-		seen[abs] = true
 
-		data, err := os.ReadFile(abs)
+		resolved, err := resolve(data, childBase, seen)
 		if err != nil {
-			return fmt.Errorf("reading include %q: %w", inc.local, err)
-		}
-		resolved, err := resolve(data, filepath.Dir(abs), seen)
-		if err != nil {
-			return fmt.Errorf("resolving include %q: %w", inc.local, err)
+			return fmt.Errorf("resolving include %q: %w", key, err)
 		}
 
 		var incDoc yaml.Node
 		if err := yaml.Unmarshal(resolved, &incDoc); err != nil {
-			return fmt.Errorf("parsing include %q: %w", inc.local, err)
+			return fmt.Errorf("parsing include %q: %w", key, err)
 		}
 		if len(incDoc.Content) == 0 || incDoc.Content[0].Kind != yaml.MappingNode {
 			continue
@@ -109,7 +143,11 @@ func resolveIncludes(root *yaml.Node, baseDir string, seen map[string]bool) erro
 }
 
 type includeRef struct {
-	local string
+	local   string
+	remote  string
+	project string
+	ref     string
+	file    string
 }
 
 func normalizeIncludes(node *yaml.Node) ([]includeRef, error) {
@@ -143,11 +181,91 @@ func normalizeIncludes(node *yaml.Node) ([]includeRef, error) {
 }
 
 func includeFromMapping(node *yaml.Node) (includeRef, error) {
+	ref := includeRef{}
 	local := mappingValue(node, "local")
 	if local != nil && local.Kind == yaml.ScalarNode {
-		return includeRef{local: local.Value}, nil
+		ref.local = local.Value
 	}
-	return includeRef{}, nil
+	remote := mappingValue(node, "remote")
+	if remote != nil && remote.Kind == yaml.ScalarNode {
+		ref.remote = remote.Value
+	}
+	project := mappingValue(node, "project")
+	if project != nil && project.Kind == yaml.ScalarNode {
+		ref.project = project.Value
+	}
+	file := mappingValue(node, "file")
+	if file != nil && file.Kind == yaml.ScalarNode {
+		ref.file = file.Value
+	}
+	refNode := mappingValue(node, "ref")
+	if refNode != nil && refNode.Kind == yaml.ScalarNode {
+		ref.ref = refNode.Value
+	}
+	if ref.local == "" && ref.remote == "" && ref.project == "" {
+		return includeRef{}, nil
+	}
+	if ref.project != "" && ref.file == "" {
+		return includeRef{}, fmt.Errorf("project include must specify 'file'")
+	}
+	return ref, nil
+}
+
+var httpClient = &http.Client{Timeout: 30 * time.Second}
+
+func fetchRemote(url string) ([]byte, string, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("User-Agent", "gitlab-ci-sim")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, "", nil
+}
+
+func fetchProject(project, ref, file string) ([]byte, string, error) {
+	if ref == "" {
+		ref = "main"
+	}
+	url := projectURL(project)
+	tmpDir, err := os.MkdirTemp("", "gitlab-ci-sim-include-")
+	if err != nil {
+		return nil, "", err
+	}
+
+	cmd := exec.Command("git", "clone", "--depth", "1", "--branch", ref, "--single-branch", url, tmpDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		os.RemoveAll(tmpDir)
+		return nil, "", fmt.Errorf("git clone %s: %w\n%s", url, err, string(out))
+	}
+	data, err := os.ReadFile(filepath.Join(tmpDir, file))
+	if err != nil {
+		os.RemoveAll(tmpDir)
+		return nil, "", err
+	}
+	return data, tmpDir, nil
+}
+
+func projectURL(project string) string {
+	if strings.HasPrefix(project, "http://") || strings.HasPrefix(project, "https://") || strings.HasPrefix(project, "git@") || strings.HasPrefix(project, "file://") {
+		return project
+	}
+	server := strings.TrimSuffix(os.Getenv("CI_SERVER_URL"), "/")
+	if server == "" {
+		server = "https://gitlab.com"
+	}
+	return server + "/" + project + ".git"
 }
 
 func resolveExtends(root *yaml.Node) {
