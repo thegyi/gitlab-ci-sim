@@ -94,6 +94,17 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 	jobCtx := vars.With(job.Variables)
 	workDir, _ := os.Getwd()
 
+	missing := jobCtx.MissingValues(executionStrings(job)...)
+	if len(missing) > 0 {
+		fmt.Fprintf(os.Stdout, "│  │  Error: undefined/empty variables: %s\n", strings.Join(missing, ", "))
+		fmt.Fprintf(os.Stdout, "│  └─ Job %s: FAILED\n", job.Name)
+		return &JobResult{
+			Name:     job.Name,
+			Success:  false,
+			Duration: time.Since(start),
+		}
+	}
+
 	mainScript := "set -e\n" + buildShellScript(append(job.BeforeScript, job.Script...))
 	mainExit, mainOut, err := e.runContainer(ctx, job, jobCtx, workDir, mainScript)
 	if err != nil {
@@ -166,4 +177,25 @@ func (e *DockerExecutor) runContainer(ctx context.Context, job *pipeline.Pipelin
 // buildShellScript combines script lines into a single shell script.
 func buildShellScript(lines []string) string {
 	return strings.Join(lines, "\n")
+}
+
+// executionStrings collects all strings that may contain CI variable references.
+func executionStrings(job *pipeline.PipelineJob) []string {
+	var ss []string
+	ss = append(ss, job.Image)
+	ss = append(ss, job.BeforeScript...)
+	ss = append(ss, job.Script...)
+	ss = append(ss, job.AfterScript...)
+	for _, svc := range job.Services {
+		ss = append(ss, svc.Name, svc.Alias)
+		ss = append(ss, svc.Command...)
+	}
+	if job.Cache != nil {
+		ss = append(ss, job.Cache.Key)
+		ss = append(ss, job.Cache.Paths...)
+	}
+	if job.Artifacts != nil {
+		ss = append(ss, job.Artifacts.Paths...)
+	}
+	return ss
 }

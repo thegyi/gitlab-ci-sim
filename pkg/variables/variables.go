@@ -59,6 +59,29 @@ func (c *Context) With(m map[string]string) *Context {
 	return n
 }
 
+// MissingValues scans the given strings for $VAR or ${VAR} references and
+// returns the names of variables that are not defined or are empty.
+func (c *Context) MissingValues(ss ...string) []string {
+	seen := make(map[string]bool)
+	var missing []string
+	for _, s := range ss {
+		for _, m := range expandRe.FindAllStringSubmatch(s, -1) {
+			name := m[1]
+			if name == "" {
+				name = m[2]
+			}
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			if v, ok := c.Vars[name]; !ok || v == "" {
+				missing = append(missing, name)
+			}
+		}
+	}
+	return missing
+}
+
 // Build creates a variable context from the local git state, top-level CI variables, and overrides.
 func Build(branch string, configVars map[string]string, overrides []string) (*Context, error) {
 	ctx := &Context{
