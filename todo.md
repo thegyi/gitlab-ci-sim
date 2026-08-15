@@ -36,9 +36,9 @@
 - [x] `cache:` restore/save
 - [x] `needs:` DAG execution
 - [x] `services:` linked helper containers
-- [ ] `include:` remote / project
+- [x] `include:` remote / project
 - [x] Colored streaming output
 - [x] Pipeline graph (`gitlab-ci-sim graph`)
 - [x] Watch mode (`gitlab-ci-sim run --watch`)
-- [ ] Masked / declared-only variables
+- [x] Masked / declared-only variables
 - [ ] Container runtime interface (Docker / Podman / fake)
