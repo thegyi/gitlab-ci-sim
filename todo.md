@@ -38,7 +38,7 @@
 - [x] `services:` linked helper containers
 - [ ] `include:` remote / project
 - [x] Colored streaming output
-- [ ] Pipeline graph (`gitlab-ci-sim graph`)
+- [x] Pipeline graph (`gitlab-ci-sim graph`)
 - [ ] Watch mode (`gitlab-ci-sim run --watch`)
 - [ ] Masked / declared-only variables
 - [ ] Container runtime interface (Docker / Podman / fake)
