@@ -4,14 +4,315 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/thegyi/gitlab-ci-sim/pkg/artifacts"
 	"github.com/thegyi/gitlab-ci-sim/pkg/parser"
 	"github.com/thegyi/gitlab-ci-sim/pkg/pipeline"
 	"github.com/thegyi/gitlab-ci-sim/pkg/variables"
 )
+
+func TestExecutorHelpers(t *testing.T) {
+	if got := buildShellScript([]string{"echo a", "echo b"}); got != "echo a\necho b" {
+		t.Errorf("buildShellScript: got %q", got)
+	}
+
+	strs := executionStrings(&pipeline.PipelineJob{
+		Name:         "job",
+		BeforeScript: []string{"before"},
+		Script:       []string{"main"},
+		AfterScript:  []string{"after"},
+		Variables:    map[string]string{"X": "1"},
+	})
+	if len(strs) != 4 {
+		t.Fatalf("executionStrings: expected 4, got %d", len(strs))
+	}
+
+	job := &pipeline.PipelineJob{
+		Name:  "job",
+		Needs: []string{"a"},
+	}
+	if needsMet(job, map[string]bool{"a": true}) != true {
+		t.Error("needsMet should be true")
+	}
+	if got := missingNeeds(job, map[string]bool{}); !reflect.DeepEqual(got, []string{"a"}) {
+		t.Fatalf("missingNeeds: %v", got)
+	}
+
+	if allPipelineJobs(&pipeline.Pipeline{Stages: []*pipeline.Stage{
+		{Name: "s1", Jobs: []*pipeline.PipelineJob{{Name: "j1"}, {Name: "j2"}}},
+		{Name: "s2", Jobs: []*pipeline.PipelineJob{{Name: "j3"}}},
+	}}); len(allPipelineJobs(&pipeline.Pipeline{})) != 0 {
+		t.Error("allPipelineJobs on empty should be 0")
+	}
+
+	if !shouldSaveArtifacts(1, "on_failure") {
+		t.Error("should save on_failure when exit 1")
+	}
+	if !shouldSaveArtifacts(0, "always") {
+		t.Error("should save always")
+	}
+	if shouldSaveArtifacts(1, "on_success") {
+		t.Error("should not save on_success when exit 1")
+	}
+	if shouldPullCache("pull") != true {
+		t.Error("should pull cache")
+	}
+	if shouldPushCache("push") != true {
+		t.Error("should push cache")
+	}
+	if cacheKey("") != "default" {
+		t.Error("cacheKey default")
+	}
+
+	ctx := &variables.Context{
+		Vars:     map[string]string{"A": "1", "B": "2", "UNDECL": "x"},
+		Declared: map[string]bool{"A": true, "B": true},
+	}
+	if got := envListFromContext(ctx); len(got) != 2 {
+		t.Fatalf("envListFromContext: %v", got)
+	}
+}
+
+func TestRedactingWriter(t *testing.T) {
+	ctx := &variables.Context{
+		Vars:   map[string]string{"SECRET": "hunter2"},
+		Masked: map[string]bool{"SECRET": true},
+	}
+	var b strings.Builder
+	w := &redactingWriter{dest: &b, values: maskedValues(ctx)}
+	fmt.Fprint(w, "hello hunter2 world")
+	w.Flush()
+	if !strings.Contains(b.String(), "[MASKED]") {
+		t.Fatalf("expected [MASKED] in %q", b.String())
+	}
+}
+
+func TestRunPipelineFailure(t *testing.T) {
+	rt := &mockRuntime{exit: []int{1}}
+	e := &DockerExecutor{runtime: rt}
+	config := &parser.Config{
+		Stages: []string{"build"},
+		Jobs: map[string]*parser.Job{
+			"build": {
+				Stage:  "build",
+				Script: []string{"exit 1"},
+			},
+		},
+	}
+	ctx := &variables.Context{
+		Vars:     map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared: map[string]bool{"CI_COMMIT_BRANCH": true},
+		Masked:   map[string]bool{},
+	}
+	pipe, err := pipeline.Build(config, ctx, nil, false, nil)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	result := e.Run(context.Background(), pipe, ctx)
+	if result.Success {
+		t.Fatal("expected pipeline failure")
+	}
+}
+
+func TestRunJobWithArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	store, err := artifacts.NewStore(filepath.Join(dir, "artifacts"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "out.txt"), []byte("data"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	rt := &FakeRuntime{}
+	e := &DockerExecutor{runtime: rt, store: store}
+	job := &pipeline.PipelineJob{
+		Name:      "save",
+		Image:     "alpine:latest",
+		Script:    []string{"echo done"},
+		Variables: map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared:  map[string]bool{"CI_COMMIT_BRANCH": true},
+		Artifacts: &parser.Artifacts{Paths: []string{"out.txt"}, When: "always"},
+	}
+	vars := &variables.Context{
+		Vars:     map[string]string{"CI": "true"},
+		Declared: map[string]bool{"CI": true},
+	}
+	jr := e.runJob(context.Background(), job, vars)
+	if !jr.Success {
+		t.Fatalf("expected success, got: %s", jr.Output)
+	}
+}
+
+func TestRunJobWithCache(t *testing.T) {
+	dir := t.TempDir()
+	cache, err := artifacts.NewStore(filepath.Join(dir, "cache"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, "vendor"), 0755); err != nil {
+		t.Fatalf("make vendor: %v", err)
+	}
+
+	rt := &FakeRuntime{}
+	e := &DockerExecutor{runtime: rt, cache: cache}
+	job := &pipeline.PipelineJob{
+		Name:      "cached",
+		Image:     "alpine:latest",
+		Script:    []string{"echo done"},
+		Variables: map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared:  map[string]bool{"CI_COMMIT_BRANCH": true},
+		Cache:     &parser.Cache{Paths: []string{"vendor"}, Key: "v1"},
+	}
+	vars := &variables.Context{
+		Vars:     map[string]string{"CI": "true"},
+		Declared: map[string]bool{"CI": true},
+	}
+	jr := e.runJob(context.Background(), job, vars)
+	if !jr.Success {
+		t.Fatalf("expected success, got: %s", jr.Output)
+	}
+}
+
+func TestRunJobServiceHealthCheckFailure(t *testing.T) {
+	rt := &mockRuntime{exit: []int{1}}
+	e := &DockerExecutor{runtime: rt}
+	job := &pipeline.PipelineJob{
+		Name:   "with_service",
+		Image:  "alpine:latest",
+		Script: []string{"echo main"},
+		Services: []parser.Service{
+			{Name: "redis:alpine", Alias: "redis"},
+		},
+		Variables: map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared:  map[string]bool{"CI_COMMIT_BRANCH": true},
+	}
+	vars := &variables.Context{
+		Vars:     map[string]string{"CI": "true"},
+		Declared: map[string]bool{"CI": true},
+	}
+	jr := e.runJob(context.Background(), job, vars)
+	if jr.Success {
+		t.Fatal("expected failure because service health check failed")
+	}
+}
+
+func TestRunJobRetryOnError(t *testing.T) {
+	rt := &mockRuntime{err: []error{fmt.Errorf("runtime failure"), nil}, exit: []int{-1, 0}}
+	e := &DockerExecutor{runtime: rt}
+	job := &pipeline.PipelineJob{
+		Name:      "retry_error",
+		Image:     "alpine:latest",
+		Script:    []string{"echo test"},
+		Retry:     &parser.Retry{Max: 2, When: []string{"always"}},
+		Variables: map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared:  map[string]bool{"CI_COMMIT_BRANCH": true},
+	}
+	vars := &variables.Context{
+		Vars:     map[string]string{"CI": "true"},
+		Declared: map[string]bool{"CI": true},
+	}
+	jr := e.runJob(context.Background(), job, vars)
+	if !jr.Success {
+		t.Fatalf("expected success after retry, got: %s", jr.Output)
+	}
+	if rt.idx != 2 {
+		t.Fatalf("expected 2 runtime calls, got %d", rt.idx)
+	}
+}
+
+func TestRunPipelineNeedsFailure(t *testing.T) {
+	rt := &mockRuntime{exit: []int{1, 0}}
+	e := &DockerExecutor{runtime: rt}
+	config := &parser.Config{
+		Stages: []string{"build", "test"},
+		Jobs: map[string]*parser.Job{
+			"build": {
+				Stage:  "build",
+				Script: []string{"exit 1"},
+			},
+			"test": {
+				Stage:  "test",
+				Script: []string{"echo test"},
+				Needs:  []string{"build"},
+			},
+		},
+	}
+	ctx := &variables.Context{
+		Vars:     map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared: map[string]bool{"CI_COMMIT_BRANCH": true},
+		Masked:   map[string]bool{},
+	}
+	pipe, err := pipeline.Build(config, ctx, nil, false, nil)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	result := e.Run(context.Background(), pipe, ctx)
+	if result.Success {
+		t.Fatal("expected pipeline failure")
+	}
+}
+
+func TestSetTriggerMode(t *testing.T) {
+	e := &DockerExecutor{}
+	e.SetTriggerMode("gitlab")
+	if e.triggerMode != "gitlab" {
+		t.Fatal("expected trigger mode to be set")
+	}
+}
+
+func TestNewRuntime(t *testing.T) {
+	if _, err := NewRuntime("fake"); err != nil {
+		t.Fatalf("expected fake runtime to succeed: %v", err)
+	}
+	if _, err := NewRuntime("unknown"); err == nil {
+		t.Fatal("expected unknown runtime to fail")
+	}
+}
+
+func TestRunPipelineWithNeeds(t *testing.T) {
+	e, err := NewDockerExecutor("fake", nil, nil)
+	if err != nil {
+		t.Fatalf("NewDockerExecutor: %v", err)
+	}
+	config := &parser.Config{
+		Stages: []string{"build", "test"},
+		Jobs: map[string]*parser.Job{
+			"build": {
+				Stage:  "build",
+				Script: []string{"echo build"},
+			},
+			"test": {
+				Stage:  "test",
+				Script: []string{"echo test"},
+				Needs:  []string{"build"},
+			},
+		},
+	}
+	ctx := &variables.Context{
+		Vars:     map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared: map[string]bool{"CI_COMMIT_BRANCH": true},
+		Masked:   map[string]bool{},
+	}
+	pipe, err := pipeline.Build(config, ctx, nil, false, nil)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	result := e.Run(context.Background(), pipe, ctx)
+	if !result.Success {
+		t.Fatalf("expected pipeline success, got: %v", result)
+	}
+	if len(result.JobResults) != 2 {
+		t.Fatalf("expected 2 job results, got %d", len(result.JobResults))
+	}
+}
 
 func TestBuildShellScript(t *testing.T) {
 	lines := []string{"echo one", "echo two"}
@@ -77,10 +378,13 @@ func (m *mockRuntime) RunDetached(ctx context.Context, opts ServiceOpts) (string
 func (m *mockRuntime) Run(ctx context.Context, opts RunOpts) (int, error) {
 	m.calls = append(m.calls, opts)
 	i := m.idx
-	if i >= len(m.exit) {
-		i = len(m.exit) - 1
+	exit := -1
+	if len(m.exit) > 0 {
+		if i >= len(m.exit) {
+			i = len(m.exit) - 1
+		}
+		exit = m.exit[i]
 	}
-	exit := m.exit[i]
 	var err error
 	if i < len(m.err) {
 		err = m.err[i]
@@ -171,6 +475,149 @@ func TestParseStartIn(t *testing.T) {
 		if got != c.want {
 			t.Fatalf("parseStartIn(%q) = %v, want %v", c.in, got, c.want)
 		}
+	}
+}
+
+func TestRunPipelineParallel(t *testing.T) {
+	e, err := NewDockerExecutor("fake", nil, nil)
+	if err != nil {
+		t.Fatalf("NewDockerExecutor: %v", err)
+	}
+	config := &parser.Config{
+		Stages: []string{"build", "test"},
+		Jobs: map[string]*parser.Job{
+			"a": {
+				Stage:  "build",
+				Script: []string{"echo a"},
+			},
+			"b": {
+				Stage:  "build",
+				Script: []string{"echo b"},
+			},
+			"c": {
+				Stage:  "test",
+				Script: []string{"echo c"},
+				Needs:  []string{"a", "b"},
+			},
+		},
+	}
+	ctx := &variables.Context{
+		Vars:     map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared: map[string]bool{"CI_COMMIT_BRANCH": true},
+		Masked:   map[string]bool{},
+	}
+	pipe, err := pipeline.Build(config, ctx, nil, false, nil)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	result := e.Run(context.Background(), pipe, ctx)
+	if !result.Success {
+		t.Fatalf("expected pipeline success, got: %v", result)
+	}
+	if len(result.JobResults) != 3 {
+		t.Fatalf("expected 3 job results, got %d", len(result.JobResults))
+	}
+}
+
+func TestRunJobAfterScript(t *testing.T) {
+	rt := &FakeRuntime{}
+	e := &DockerExecutor{runtime: rt}
+	job := &pipeline.PipelineJob{
+		Name:        "after",
+		Image:       "alpine:latest",
+		Script:      []string{"echo main"},
+		AfterScript: []string{"echo after"},
+		Variables:   map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared:    map[string]bool{"CI_COMMIT_BRANCH": true},
+	}
+	vars := &variables.Context{
+		Vars:     map[string]string{"CI": "true"},
+		Declared: map[string]bool{"CI": true},
+	}
+	jr := e.runJob(context.Background(), job, vars)
+	if !jr.Success {
+		t.Fatalf("expected success, got: %s", jr.Output)
+	}
+	if !strings.Contains(jr.Output, "after") {
+		t.Error("expected after_script output")
+	}
+}
+
+func TestRunJobRuntimeErrorNoRetry(t *testing.T) {
+	rt := &mockRuntime{err: []error{fmt.Errorf("runtime failure")}}
+	e := &DockerExecutor{runtime: rt}
+	job := &pipeline.PipelineJob{
+		Name:      "fail",
+		Image:     "alpine:latest",
+		Script:    []string{"echo"},
+		Variables: map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared:  map[string]bool{"CI_COMMIT_BRANCH": true},
+	}
+	vars := &variables.Context{
+		Vars:     map[string]string{"CI": "true"},
+		Declared: map[string]bool{"CI": true},
+	}
+	jr := e.runJob(context.Background(), job, vars)
+	if jr.Success {
+		t.Fatal("expected failure on runtime error")
+	}
+}
+
+func TestRunJobTriggerLocal(t *testing.T) {
+	rt := &FakeRuntime{}
+	e := &DockerExecutor{runtime: rt, triggerMode: "local"}
+	job := &pipeline.PipelineJob{
+		Name:      "trigger",
+		Trigger:   &parser.Trigger{Project: "group/proj", Branch: "main"},
+		Variables: map[string]string{"CI_SERVER_URL": "https://gitlab.example.com"},
+		Declared:  map[string]bool{"CI_SERVER_URL": true},
+	}
+	vars := &variables.Context{
+		Vars:     map[string]string{"CI_SERVER_URL": "https://gitlab.example.com"},
+		Declared: map[string]bool{"CI_SERVER_URL": true},
+	}
+	jr := e.runJob(context.Background(), job, vars)
+	if !jr.Success {
+		t.Fatalf("expected local trigger to pass, got: %s", jr.Output)
+	}
+	if !strings.Contains(jr.Output, "not executed locally") {
+		t.Error("expected 'not executed locally' message")
+	}
+}
+
+func TestGitlabToken(t *testing.T) {
+	ctx := &variables.Context{
+		Vars:     map[string]string{"GITLAB_TOKEN": "abc"},
+		Declared: map[string]bool{"GITLAB_TOKEN": true},
+	}
+	token, header := gitlabToken(ctx)
+	if token != "abc" || header != "PRIVATE-TOKEN" {
+		t.Fatalf("expected PRIVATE-TOKEN abc, got %s %s", header, token)
+	}
+
+	ctx = &variables.Context{
+		Vars:     map[string]string{"CI_JOB_TOKEN": "job"},
+		Declared: map[string]bool{"CI_JOB_TOKEN": true},
+	}
+	token, header = gitlabToken(ctx)
+	if token != "job" || header != "JOB-TOKEN" {
+		t.Fatalf("expected JOB-TOKEN job, got %s %s", header, token)
+	}
+}
+
+func TestNewDockerExecutorUnknownRuntime(t *testing.T) {
+	_, err := NewDockerExecutor("none", nil, nil)
+	if err == nil {
+		t.Fatal("expected error for unknown runtime")
+	}
+}
+
+func TestResultPrint(t *testing.T) {
+	res := &Result{Success: true, JobResults: []*JobResult{{Name: "build", Success: true}}}
+	var b strings.Builder
+	res.Print(&b)
+	if !strings.Contains(b.String(), "build") {
+		t.Fatalf("expected output to contain build, got %q", b.String())
 	}
 }
 

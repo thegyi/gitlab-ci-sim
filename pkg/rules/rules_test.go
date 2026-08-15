@@ -248,6 +248,91 @@ func TestChangesMatch(t *testing.T) {
 	}
 }
 
+func TestExceptRefs(t *testing.T) {
+	ctx := testContext()
+	job := &parser.Job{
+		Name:   "deploy",
+		Except: &parser.OnlyExcept{Refs: []string{"main"}},
+	}
+	res, err := ShouldRun(job, ctx, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Run {
+		t.Error("job should not run on main because of except")
+	}
+}
+
+func TestMatchRefs(t *testing.T) {
+	cases := []struct {
+		refs   []string
+		branch string
+		source string
+		want   bool
+	}{
+		{[]string{"main"}, "main", "push", true},
+		{[]string{"tags"}, "refs/tags/v1", "push", true},
+		{[]string{"merge_requests"}, "main", "merge_request_event", true},
+		{[]string{"pipelines"}, "main", "pipeline", true},
+		{[]string{"schedules"}, "main", "schedule", true},
+		{[]string{"main"}, "feature", "push", false},
+	}
+	for _, c := range cases {
+		got := matchRefs(c.refs, c.branch, c.source)
+		if got != c.want {
+			t.Errorf("matchRefs(%v, %q, %q) = %v, want %v", c.refs, c.branch, c.source, got, c.want)
+		}
+	}
+}
+
+func TestBuildResult(t *testing.T) {
+	cases := []struct {
+		when   string
+		manual bool
+		want   bool
+	}{
+		{"", false, true},
+		{"on_success", false, true},
+		{"never", false, false},
+		{"manual", false, false},
+		{"manual", true, true},
+		{"delayed", false, true},
+	}
+	for _, c := range cases {
+		res := buildResult(c.when, nil, c.manual)
+		if res.Run != c.want {
+			t.Errorf("buildResult(%q, manual=%v).Run = %v, want %v", c.when, c.manual, res.Run, c.want)
+		}
+	}
+}
+
+func TestMergeAndFormatVariables(t *testing.T) {
+	merged := MergeVariables(
+		map[string]string{"A": "1", "B": "2"},
+		map[string]string{"B": "3", "C": "4"},
+	)
+	if merged["A"] != "1" || merged["B"] != "3" || merged["C"] != "4" {
+		t.Fatalf("unexpected merged variables: %v", merged)
+	}
+
+	formatted := FormatVariables(map[string]string{"Z": "1", "A": "2"})
+	want := "A=2\nZ=1\n"
+	if formatted != want {
+		t.Fatalf("FormatVariables: expected %q, got %q", want, formatted)
+	}
+}
+
+func TestEvalIfVariableBraces(t *testing.T) {
+	ctx := testContext()
+	ok, err := evalIf(`${CI_COMMIT_BRANCH} == "main"`, ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Error("expected true for braced variable")
+	}
+}
+
 func TestExistsMatch(t *testing.T) {
 	dir := t.TempDir()
 	old, _ := os.Getwd()

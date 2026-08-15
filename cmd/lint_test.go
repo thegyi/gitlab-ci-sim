@@ -99,6 +99,49 @@ build_job:
 	}
 }
 
+func TestLintConfigWarnings(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "gitlab-ci.yml")
+	content := `
+stages:
+  - build
+
+empty_job:
+  stage: build
+`
+	if err := os.WriteFile(cfg, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cmd := newLintCmd(cfg)
+	if err := lintConfig(cmd, nil); err != nil {
+		t.Fatalf("lintConfig should return nil for warnings, got: %v", err)
+	}
+}
+
+func TestLintConfigUnknownWhen(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "gitlab-ci.yml")
+	content := `
+stages:
+  - build
+
+build:
+  stage: build
+  when: unknown
+  script:
+    - echo
+`
+	if err := os.WriteFile(cfg, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cmd := newLintCmd(cfg)
+	if err := lintConfig(cmd, nil); err == nil {
+		t.Fatal("expected error for unknown when")
+	}
+}
+
 func TestLintConfigCircularNeeds(t *testing.T) {
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "gitlab-ci.yml")

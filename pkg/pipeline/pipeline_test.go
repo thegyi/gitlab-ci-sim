@@ -198,6 +198,42 @@ func TestBuildParallelMatrix(t *testing.T) {
 	}
 }
 
+func TestResolveHelpers(t *testing.T) {
+	ctx := &variables.Context{
+		Vars:     map[string]string{"IMAGE": "node:18"},
+		Declared: map[string]bool{"IMAGE": true},
+		Masked:   map[string]bool{},
+	}
+
+	img := resolveImage(&parser.Job{Image: "$IMAGE"}, nil, ctx)
+	if img != "node:18" {
+		t.Fatalf("resolveImage: expected node:18, got %q", img)
+	}
+
+	img = resolveImage(&parser.Job{}, &parser.JobDefaults{Image: "alpine:latest"}, ctx)
+	if img != "alpine:latest" {
+		t.Fatalf("resolveImage: expected alpine:latest, got %q", img)
+	}
+
+	img = resolveImage(&parser.Job{}, nil, &variables.Context{Vars: map[string]string{}})
+	if img != "alpine:latest" {
+		t.Fatalf("resolveImage: expected default alpine:latest, got %q", img)
+	}
+
+	job := &parser.Job{BeforeScript: []string{"a"}, AfterScript: []string{"b"}}
+	if got := resolveBeforeScript(job, nil); !reflect.DeepEqual(got, []string{"a"}) {
+		t.Fatalf("resolveBeforeScript: expected [a], got %v", got)
+	}
+	if got := resolveAfterScript(job, nil); !reflect.DeepEqual(got, []string{"b"}) {
+		t.Fatalf("resolveAfterScript: expected [b], got %v", got)
+	}
+
+	defaults := &parser.JobDefaults{BeforeScript: []string{"default"}}
+	if got := resolveBeforeScript(&parser.Job{}, defaults); !reflect.DeepEqual(got, []string{"default"}) {
+		t.Fatalf("resolveBeforeScript: expected default, got %v", got)
+	}
+}
+
 func TestBuildJobFilter(t *testing.T) {
 	config := &parser.Config{
 		Stages: []string{"build", "test"},
