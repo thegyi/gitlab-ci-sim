@@ -55,15 +55,16 @@ func (r *Result) Print(w io.Writer) {
 type DockerExecutor struct {
 	client string
 	store  *artifacts.Store
+	cache  *artifacts.Store
 }
 
 // NewDockerExecutor creates a new Docker-based executor.
-func NewDockerExecutor(store *artifacts.Store) *DockerExecutor {
+func NewDockerExecutor(store, cache *artifacts.Store) *DockerExecutor {
 	client, _ := exec.LookPath("docker")
 	if client == "" {
 		client = "docker"
 	}
-	return &DockerExecutor{client: client, store: store}
+	return &DockerExecutor{client: client, store: store, cache: cache}
 }
 
 // Run executes the full pipeline stage by stage.
@@ -109,6 +110,12 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 		}
 	}
 
+	// Restore cache if configured.
+	if e.cache != nil && job.Cache != nil && shouldPullCache(job.Cache.Policy) {
+		key := jobCtx.Expand(cacheKey(job.Cache.Key))
+		_ = e.cache.Restore(key, workDir)
+	}
+
 	// Restore artifacts from jobs this one depends on.
 	if e.store != nil {
 		for _, need := range job.Needs {
@@ -152,6 +159,16 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 		_ = e.store.Save(job.Name, workDir, job.Artifacts.Paths)
 	}
 
+	// Save cache if configured.
+	if e.cache != nil && job.Cache != nil && shouldPushCache(job.Cache.Policy) {
+		key := jobCtx.Expand(cacheKey(job.Cache.Key))
+		paths := make([]string, 0, len(job.Cache.Paths))
+		for _, p := range job.Cache.Paths {
+			paths = append(paths, jobCtx.Expand(p))
+		}
+		_ = e.cache.Save(key, workDir, paths)
+	}
+
 	return &JobResult{
 		Name:     job.Name,
 		Success:  success,
@@ -170,6 +187,21 @@ func shouldSaveArtifacts(exit int, when string) bool {
 		return exit == 0
 	}
 	return false
+}
+
+func cacheKey(k string) string {
+	if k == "" {
+		return "default"
+	}
+	return k
+}
+
+func shouldPullCache(policy string) bool {
+	return policy == "" || policy == "pull" || policy == "pull-push" || policy == "push-pull"
+}
+
+func shouldPushCache(policy string) bool {
+	return policy == "" || policy == "push" || policy == "pull-push" || policy == "push-pull"
 }
 
 // runContainer runs a Docker container with the given script on stdin.

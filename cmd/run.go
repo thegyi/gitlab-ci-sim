@@ -61,11 +61,15 @@ func runJobs(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("could not determine cache dir: %w", err)
 	}
-	store, err := artifacts.NewStore(filepath.Join(cacheDir, "gitlab-ci-sim", "artifacts"))
+	artifactStore, err := artifacts.NewStore(filepath.Join(cacheDir, "gitlab-ci-sim", "artifacts"))
 	if err != nil {
 		return fmt.Errorf("could not create artifact store: %w", err)
 	}
-	exec := executor.NewDockerExecutor(store)
+	cacheStore, err := artifacts.NewStore(filepath.Join(cacheDir, "gitlab-ci-sim", "cache"))
+	if err != nil {
+		return fmt.Errorf("could not create cache store: %w", err)
+	}
+	exec := executor.NewDockerExecutor(artifactStore, cacheStore)
 	result := exec.Run(pipe, vars)
 
 	result.Print(os.Stdout)
