@@ -41,6 +41,7 @@ type PipelineJob struct {
 	Dependencies []string
 	AllowFailure bool
 	When         string
+	Tags         []string
 	Retry        *parser.Retry
 	StartIn      string
 	Trigger      *parser.Trigger
@@ -48,7 +49,8 @@ type PipelineJob struct {
 
 // Build creates an executable pipeline from the parsed config.
 // If allowManual is true, jobs with when: manual are treated as runnable.
-func Build(config *parser.Config, vars *variables.Context, jobFilter []string, allowManual bool) (*Pipeline, error) {
+// If tags is non-empty, only jobs with matching tags (or no tags) are included.
+func Build(config *parser.Config, vars *variables.Context, jobFilter []string, allowManual bool, tags []string) (*Pipeline, error) {
 	pipe := &Pipeline{}
 
 	// Create stage map for ordering
@@ -76,6 +78,9 @@ func Build(config *parser.Config, vars *variables.Context, jobFilter []string, a
 			return nil, err
 		}
 		if !res.Run {
+			continue
+		}
+		if len(tags) > 0 && len(job.Tags) > 0 && !hasAnyTag(job.Tags, tags) {
 			continue
 		}
 
@@ -112,6 +117,7 @@ func Build(config *parser.Config, vars *variables.Context, jobFilter []string, a
 			Dependencies: job.Dependencies,
 			AllowFailure: job.AllowFailure,
 			When:         res.When,
+			Tags:         job.Tags,
 			Retry:        job.Retry,
 			StartIn:      job.StartIn,
 			Trigger:      job.Trigger,
@@ -166,6 +172,19 @@ func serviceNames(services []parser.Service) string {
 		names = append(names, n)
 	}
 	return strings.Join(names, ", ")
+}
+
+func hasAnyTag(jobTags, filter []string) bool {
+	set := make(map[string]bool, len(filter))
+	for _, t := range filter {
+		set[t] = true
+	}
+	for _, t := range jobTags {
+		if set[t] {
+			return true
+		}
+	}
+	return false
 }
 
 func expandParallel(stage *Stage, base *PipelineJob, name string, parallel *parser.Parallel) {

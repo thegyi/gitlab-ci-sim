@@ -101,6 +101,14 @@ Re-run the pipeline when `.gitlab-ci.yml` changes:
 gitlab-ci-sim run --watch
 ```
 
+### Filter by tags
+
+Run only jobs tagged with `docker` or `linux` (jobs without any tags are also included):
+
+```bash
+gitlab-ci-sim run --tags docker,linux
+```
+
 ### Lint/validate configuration
 
 ```bash
@@ -150,6 +158,7 @@ gitlab-ci-sim run --branch main
 - [x] `when: manual` / `when: delayed` support
 - [x] `parallel:` / `matrix:` expansion
 - [x] Interactive job selection
+- [x] `tags` filtering with `--tags`
 - [x] Dry-run mode and pipeline graph (`gitlab-ci-sim graph`)
 - [x] Watch mode (re-run on config changes)
 - [x] Graceful shutdown on `SIGINT`/`SIGTERM`
@@ -159,7 +168,6 @@ gitlab-ci-sim run --branch main
 
 ### Planned
 - [ ] Service health checks
-- [ ] `tags` filtering
 - [ ] Docker-in-Docker / privileged containers
 
 ## Notes and limitations

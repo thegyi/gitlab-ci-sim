@@ -48,7 +48,7 @@ func lintConfig(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to build variables: %w", err)
 	}
-	_, err = pipeline.Build(config, vars, nil, true)
+	_, err = pipeline.Build(config, vars, nil, true, nil)
 	if err != nil {
 		return fmt.Errorf("invalid pipeline: %w", err)
 	}

@@ -52,7 +52,7 @@ func graph(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to build variables: %w", err)
 	}
 
-	pipe, err := pipeline.Build(config, vars, args, true)
+	pipe, err := pipeline.Build(config, vars, args, true, nil)
 	if err != nil {
 		return fmt.Errorf("failed to build pipeline: %w", err)
 	}

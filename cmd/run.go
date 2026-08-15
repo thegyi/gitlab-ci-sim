@@ -39,6 +39,7 @@ func init() {
 	runCmd.Flags().Bool("list", false, "List jobs that would run and exit")
 	runCmd.Flags().Bool("manual", false, "Treat when: manual jobs as runnable")
 	runCmd.Flags().Bool("interactive", false, "Interactively select which jobs to run")
+	runCmd.Flags().StringSlice("tags", nil, "Run only jobs with one of these tags (or jobs without tags)")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -57,6 +58,7 @@ func runJobs(cmd *cobra.Command, args []string) error {
 	list, _ := cmd.Flags().GetBool("list")
 	manual, _ := cmd.Flags().GetBool("manual")
 	interactive, _ := cmd.Flags().GetBool("interactive")
+	tags, _ := cmd.Flags().GetStringSlice("tags")
 
 	lastMod := time.Time{}
 	if watch {
@@ -142,7 +144,7 @@ func runJobs(cmd *cobra.Command, args []string) error {
 		}
 		allowManual := manual || len(args) > 0
 		if interactive {
-			allPipe, err := pipeline.Build(config, vars, nil, true)
+			allPipe, err := pipeline.Build(config, vars, nil, true, tags)
 			if err != nil {
 				return fmt.Errorf("failed to build pipeline: %w", err)
 			}
@@ -153,7 +155,7 @@ func runJobs(cmd *cobra.Command, args []string) error {
 			args = selected
 			allowManual = true
 		}
-		pipe, err := pipeline.Build(config, vars, args, allowManual)
+		pipe, err := pipeline.Build(config, vars, args, allowManual, tags)
 		if err != nil {
 			if !watch {
 				return fmt.Errorf("failed to build pipeline: %w", err)
