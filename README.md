@@ -5,12 +5,14 @@ configuration, and execute jobs in Docker containers on your machine.
 
 ## Features
 
-- Parse `.gitlab-ci.yml` with stages, jobs, variables, services
-- Resolve `extends:`, `include:` (planned), `rules:`
-- Execute jobs in Docker containers
-- Artifact passing between jobs
-- Variable engine seeded from local git state
-- Dry-run mode for pipeline visualization
+- Parse `.gitlab-ci.yml` with stages, jobs, variables, services, triggers
+- Resolve `extends:`, `include:` (local/remote/project), `rules:`, `only:`/`except:`
+- Execute jobs in Docker or Podman containers via a pluggable runtime
+- Artifact and cache passing between jobs
+- Variable engine seeded from local git state, with masking and CLI overrides
+- Dry-run mode and pipeline graph (`gitlab-ci-sim graph`)
+- Watch mode to re-run on config changes
+- Colored terminal output
 - Config linting/validation
 
 ## Install
@@ -63,6 +65,26 @@ gitlab-ci-sim run --dry-run
 gitlab-ci-sim run -v CI_COMMIT_BRANCH=feature -v DEPLOY_ENV=staging
 ```
 
+Mask sensitive values so they are redacted from the output:
+
+```bash
+gitlab-ci-sim run -v AD_PASSWORD=secret,masked -v GITLAB_PASSWORD=secret,masked
+```
+
+### Show the pipeline graph
+
+```bash
+gitlab-ci-sim graph
+```
+
+### Watch mode
+
+Re-run the pipeline when `.gitlab-ci.yml` changes:
+
+```bash
+gitlab-ci-sim run --watch
+```
+
 ### Lint/validate configuration
 
 ```bash
@@ -83,46 +105,49 @@ gitlab-ci-sim run --branch main
 ├── cmd/                     # CLI commands (cobra)
 │   ├── root.go              # Root command and global flags
 │   ├── run.go               # `run` subcommand
+│   ├── graph.go             # `graph` subcommand
 │   └── lint.go              # `lint` subcommand
 ├── pkg/
 │   ├── parser/              # YAML parser and config resolution
 │   ├── pipeline/            # Pipeline builder (stages, DAG, rules)
-│   ├── executor/            # Docker-based job executor
+│   ├── executor/            # Docker/Podman/fake runtime executor
 │   ├── variables/           # CI variable engine
-│   └── artifacts/           # Artifact store between jobs
+│   ├── artifacts/           # Artifact store between jobs
+│   └── term/                # Terminal color helpers
 └── README.md
 ```
 
 ## Roadmap
 
-### Phase 1 — MVP (current)
-- [x] Parse `.gitlab-ci.yml` (stages, jobs, scripts, images)
-- [x] Variable engine from local git state
-- [x] Pipeline builder with stage ordering
-- [x] Stub executor (prints commands)
-- [x] Dry-run mode
-- [x] Config linting
-- [ ] Docker executor (real container execution)
+### Implemented
+- [x] Parse `.gitlab-ci.yml` (stages, jobs, scripts, images, services, triggers)
+- [x] Variable engine from local git state, CLI overrides, and masking
+- [x] `extends:` / `!reference` resolution
+- [x] `include:` (local, remote, project)
+- [x] `rules:` / `only:` / `except:` evaluation
+- [x] Real Docker / Podman / fake container execution via pluggable runtime
+- [x] `services:` support (linked containers with network aliases)
+- [x] `artifacts:` and `cache:` passing between jobs
+- [x] `needs:` DAG execution (parallel across stages when dependencies are met)
+- [x] Dry-run mode and pipeline graph (`gitlab-ci-sim graph`)
+- [x] Watch mode (re-run on config changes)
+- [x] Colored terminal output
+- [x] Config linting/validation
 
-### Phase 2 — Pipeline execution
-- [ ] Real Docker container execution
-- [ ] `services:` support (linked containers)
-- [ ] `artifacts:` passing between jobs
-- [ ] `cache:` support
-- [ ] `needs:` DAG execution (parallel within stage)
-
-### Phase 3 — Full resolution
-- [ ] `include:` (local, remote, template, project)
-- [ ] `extends:` / `!reference` resolution
-- [ ] `rules:` evaluation (if/changes/exists)
-- [ ] `parallel: matrix:` expansion
-- [ ] `only:` / `except:` evaluation
-
-### Phase 4 — UX
-- [ ] Pipeline graph visualization (terminal)
+### Planned
+- [ ] `workflow:` rules
+- [ ] `parallel:` / `matrix:` expansion
+- [ ] `when: manual` / `when: delayed` support
+- [ ] Real downstream `trigger:` via GitLab API
+- [ ] Graceful shutdown on `SIGINT`/`SIGTERM`
 - [ ] Interactive job selection
-- [ ] Watch mode (re-run on file changes)
-- [ ] Colored output and progress bars
+- [ ] File-loaded variables (`.env`)
+- [ ] More predefined CI variables and richer linting
+
+## Notes and limitations
+
+- `trigger:` jobs are recognised but **not executed locally**. They are reported as passed so the local simulation can continue, but they do not create a real downstream GitLab pipeline. Use the GitLab API or a real runner to trigger downstream pipelines.
+- Some advanced GitLab features are not yet implemented (see Roadmap below).
 
 ## Development
 
