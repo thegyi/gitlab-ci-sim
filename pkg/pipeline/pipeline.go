@@ -1,0 +1,156 @@
+package pipeline
+
+import (
+	"fmt"
+	"io"
+
+	"github.com/thegyi/gitlab-ci-sim/pkg/parser"
+	"github.com/thegyi/gitlab-ci-sim/pkg/rules"
+	"github.com/thegyi/gitlab-ci-sim/pkg/variables"
+)
+
+// Pipeline represents the resolved, execution-ready pipeline.
+type Pipeline struct {
+	Stages []*Stage
+}
+
+// Stage groups jobs that can run in parallel.
+type Stage struct {
+	Name string
+	Jobs []*PipelineJob
+}
+
+// PipelineJob is a job ready for execution.
+type PipelineJob struct {
+	Name         string
+	Image        string
+	Script       []string
+	BeforeScript []string
+	AfterScript  []string
+	Variables    map[string]string
+	Services     []parser.Service
+	Artifacts    *parser.Artifacts
+	Cache        *parser.Cache
+	Needs        []string
+	AllowFailure bool
+}
+
+// Build creates an executable pipeline from the parsed config.
+func Build(config *parser.Config, vars *variables.Context, jobFilter []string) (*Pipeline, error) {
+	pipe := &Pipeline{}
+
+	// Create stage map for ordering
+	stageIndex := make(map[string]int)
+	for i, s := range config.Stages {
+		stageIndex[s] = i
+	}
+
+	// Initialize stages
+	stages := make([]*Stage, len(config.Stages))
+	for i, name := range config.Stages {
+		stages[i] = &Stage{Name: name}
+	}
+
+	// Assign jobs to stages
+	for name, job := range config.Jobs {
+		// Filter by specified jobs if any
+		if len(jobFilter) > 0 && !contains(jobFilter, name) {
+			continue
+		}
+
+		// Evaluate rules, only/except and when.
+		res, err := rules.ShouldRun(job, vars, contains(jobFilter, name))
+		if err != nil {
+			return nil, err
+		}
+		if !res.Run {
+			continue
+		}
+
+		idx, ok := stageIndex[job.Stage]
+		if !ok {
+			return nil, fmt.Errorf("job %q references unknown stage %q", name, job.Stage)
+		}
+
+		pj := &PipelineJob{
+			Name:         name,
+			Image:        resolveImage(job, config.Default),
+			Script:       job.Script,
+			BeforeScript: resolveBeforeScript(job, config.Default),
+			AfterScript:  resolveAfterScript(job, config.Default),
+			Variables:    rules.MergeVariables(job.Variables, res.Variables),
+			Services:     job.Services,
+			Artifacts:    job.Artifacts,
+			Cache:        job.Cache,
+			Needs:        job.Needs,
+			AllowFailure: job.AllowFailure,
+		}
+		stages[idx].Jobs = append(stages[idx].Jobs, pj)
+	}
+
+	// Filter out empty stages
+	for _, s := range stages {
+		if len(s.Jobs) > 0 {
+			pipe.Stages = append(pipe.Stages, s)
+		}
+	}
+
+	return pipe, nil
+}
+
+// Print outputs the pipeline structure.
+func (p *Pipeline) Print(w io.Writer) {
+	fmt.Fprintf(w, "Pipeline: %d stages\n", len(p.Stages))
+	for _, s := range p.Stages {
+		fmt.Fprintf(w, "\n  Stage: %s (%d jobs)\n", s.Name, len(s.Jobs))
+		for _, j := range s.Jobs {
+			img := j.Image
+			if img == "" {
+				img = "(default)"
+			}
+			fmt.Fprintf(w, "    - %s [image: %s]\n", j.Name, img)
+			for _, line := range j.Script {
+				fmt.Fprintf(w, "        $ %s\n", line)
+			}
+		}
+	}
+}
+
+func resolveImage(job *parser.Job, defaults *parser.JobDefaults) string {
+	if job.Image != "" {
+		return job.Image
+	}
+	if defaults != nil && defaults.Image != "" {
+		return defaults.Image
+	}
+	return "alpine:latest"
+}
+
+func resolveBeforeScript(job *parser.Job, defaults *parser.JobDefaults) []string {
+	if len(job.BeforeScript) > 0 {
+		return job.BeforeScript
+	}
+	if defaults != nil {
+		return defaults.BeforeScript
+	}
+	return nil
+}
+
+func resolveAfterScript(job *parser.Job, defaults *parser.JobDefaults) []string {
+	if len(job.AfterScript) > 0 {
+		return job.AfterScript
+	}
+	if defaults != nil {
+		return defaults.AfterScript
+	}
+	return nil
+}
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}

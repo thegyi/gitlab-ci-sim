@@ -1,0 +1,13 @@
+# Built binary
+gitlab-ci-sim
+
+# Test binaries
+*.test
+*.out
+
+# Vendor
+coverage.txt
+vendor/
+
+# Go workspace
+go.work
