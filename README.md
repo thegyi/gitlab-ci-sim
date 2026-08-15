@@ -141,38 +141,10 @@ gitlab-ci-sim run --branch main
 └── README.md
 ```
 
-## Roadmap
-
-### Implemented
-- [x] Parse `.gitlab-ci.yml` (stages, jobs, scripts, images, services, triggers, `retry:`)
-- [x] Variable engine from local git state, CLI overrides, masking, predefined CI variables, and `.env` files
-- [x] `extends:` / `!reference` resolution
-- [x] `include:` (local, remote, project)
-- [x] `rules:` / `only:` / `except:` evaluation
-- [x] `workflow:` rules
-- [x] Real Docker / Podman / fake container execution via pluggable runtime
-- [x] `services:` support (linked containers with network aliases and health checks)
-- [x] `artifacts:` and `cache:` passing between jobs
-- [x] `needs:` / `dependencies:` DAG execution and artifact passing
-- [x] `retry:` on failed jobs
-- [x] `when: manual` / `when: delayed` support
-- [x] `parallel:` / `matrix:` expansion
-- [x] Interactive job selection
-- [x] `tags` filtering with `--tags`
-- [x] Dry-run mode and pipeline graph (`gitlab-ci-sim graph`)
-- [x] Watch mode (re-run on config changes)
-- [x] Graceful shutdown on `SIGINT`/`SIGTERM`
-- [x] `--list` to preview jobs
-- [x] Colored terminal output
-- [x] Config linting/validation
-
-### Planned
-- [ ] Docker-in-Docker / privileged containers
-
 ## Notes and limitations
 
 - `trigger:` jobs are skipped locally by default. Use `--trigger-mode=gitlab` to create the downstream pipeline via the GitLab API (requires `CI_SERVER_URL` and `GITLAB_TOKEN` or `CI_JOB_TOKEN`).
-- Some advanced GitLab features are not yet implemented (see Roadmap below).
+- Some advanced GitLab features are not yet implemented (e.g. Docker-in-Docker / privileged containers).
 
 ## Development
 
