@@ -55,6 +55,63 @@ func TestStoreRestoreMissing(t *testing.T) {
 	}
 }
 
+func TestCopyFileErrors(t *testing.T) {
+	if err := copyFile("/nonexistent/path", "/tmp/dest"); err == nil {
+		t.Error("expected error for missing source")
+	}
+
+	readOnly := t.TempDir()
+	if err := os.Chmod(readOnly, 0000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(readOnly, 0755) })
+
+	src := filepath.Join(t.TempDir(), "src")
+	if err := os.WriteFile(src, []byte("x"), 0644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	if err := copyFile(src, filepath.Join(readOnly, "dst")); err == nil {
+		t.Error("expected error for read-only destination")
+	}
+}
+
+func TestNewStoreOnFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "storefile")
+	if err := os.WriteFile(path, []byte("x"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	_, err := NewStore(path)
+	if err == nil {
+		t.Fatal("expected error creating store on a file")
+	}
+}
+
+func TestSaveNoMatches(t *testing.T) {
+	storeDir := filepath.Join(t.TempDir(), "store")
+	store, err := NewStore(storeDir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	srcDir := t.TempDir()
+	if err := store.Save("job", srcDir, []string{"*.nomatch"}); err != nil {
+		t.Fatalf("Save with no matches should not error: %v", err)
+	}
+}
+
+func TestRestoreOnFile(t *testing.T) {
+	storeDir := filepath.Join(t.TempDir(), "store")
+	store, err := NewStore(storeDir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(storeDir, "job"), []byte("x"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := store.Restore("job", t.TempDir()); err == nil {
+		t.Fatal("expected error when stored artifact is a file, not a directory")
+	}
+}
+
 func TestStoreClean(t *testing.T) {
 	storeDir := filepath.Join(t.TempDir(), "store")
 	store, err := NewStore(storeDir)
