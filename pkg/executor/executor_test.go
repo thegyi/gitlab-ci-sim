@@ -4,23 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/thegyi/gitlab-ci-sim/pkg/pipeline"
 	"github.com/thegyi/gitlab-ci-sim/pkg/variables"
 )
-
-func fakeDocker(t *testing.T) string {
-	t.Helper()
-	script := []byte("#!/bin/sh\n# ignore docker args; just echo stdin and done\ncat\necho '--- done ---'\n")
-	p := filepath.Join(t.TempDir(), "docker")
-	if err := os.WriteFile(p, script, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return p
-}
 
 func TestBuildShellScript(t *testing.T) {
 	lines := []string{"echo one", "echo two"}
@@ -30,13 +19,13 @@ func TestBuildShellScript(t *testing.T) {
 }
 
 func TestRunJobRejectsMissingVariables(t *testing.T) {
-	e := &DockerExecutor{client: fakeDocker(t)}
+	e := &DockerExecutor{runtime: &FakeRuntime{}}
 	job := &pipeline.PipelineJob{
 		Name:   "test",
 		Image:  "alpine:latest",
 		Script: []string{"echo $UNKNOWN"},
 	}
-	vars := &variables.Context{Vars: map[string]string{} }
+	vars := &variables.Context{Vars: map[string]string{}, Declared: map[string]bool{}}
 	jr := e.runJob(context.Background(), job, vars)
 	if jr.Success {
 		t.Error("expected job to fail because $UNKNOWN is not defined")
@@ -47,15 +36,16 @@ func TestRunJobRejectsMissingVariables(t *testing.T) {
 }
 
 func TestRunJobFakeContainer(t *testing.T) {
-	e := &DockerExecutor{client: fakeDocker(t)}
+	e := &DockerExecutor{runtime: &FakeRuntime{}}
 	job := &pipeline.PipelineJob{
 		Name:         "test",
 		Image:        "alpine:latest",
 		BeforeScript: []string{"echo before"},
 		Script:       []string{"echo script"},
 		Variables:    map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared:     map[string]bool{"CI_COMMIT_BRANCH": true},
 	}
-	vars := &variables.Context{Vars: map[string]string{"CI": "true"}}
+	vars := &variables.Context{Vars: map[string]string{"CI": "true"}, Declared: map[string]bool{"CI": true}}
 	jr := e.runJob(context.Background(), job, vars)
 	if !jr.Success {
 		t.Fatalf("expected success, got output: %s", jr.Output)

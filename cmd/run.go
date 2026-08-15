@@ -27,6 +27,7 @@ func init() {
 	runCmd.Flags().Bool("dry-run", false, "Show what would be executed without running")
 	runCmd.Flags().String("branch", "", "Simulate a specific branch (default: current git branch)")
 	runCmd.Flags().Bool("watch", false, "Re-run the pipeline when .gitlab-ci.yml changes")
+	runCmd.Flags().String("runtime", "docker", "Container runtime to use: docker, podman, or fake")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -108,7 +109,11 @@ func runJobs(cmd *cobra.Command, args []string) error {
 			if err != nil {
 				return fmt.Errorf("could not create cache store: %w", err)
 			}
-			exec := executor.NewDockerExecutor(artifactStore, cacheStore)
+			runtime, _ := cmd.Flags().GetString("runtime")
+			exec, err := executor.NewDockerExecutor(runtime, artifactStore, cacheStore)
+			if err != nil {
+				return fmt.Errorf("could not create executor: %w", err)
+			}
 			result := exec.Run(pipe, vars)
 			result.Print(os.Stdout)
 		}
