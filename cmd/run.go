@@ -3,8 +3,10 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
+	"github.com/thegyi/gitlab-ci-sim/pkg/artifacts"
 	"github.com/thegyi/gitlab-ci-sim/pkg/executor"
 	"github.com/thegyi/gitlab-ci-sim/pkg/parser"
 	"github.com/thegyi/gitlab-ci-sim/pkg/pipeline"
@@ -55,7 +57,15 @@ func runJobs(cmd *cobra.Command, args []string) error {
 	}
 
 	// Execute the pipeline
-	exec := executor.NewDockerExecutor()
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return fmt.Errorf("could not determine cache dir: %w", err)
+	}
+	store, err := artifacts.NewStore(filepath.Join(cacheDir, "gitlab-ci-sim", "artifacts"))
+	if err != nil {
+		return fmt.Errorf("could not create artifact store: %w", err)
+	}
+	exec := executor.NewDockerExecutor(store)
 	result := exec.Run(pipe, vars)
 
 	result.Print(os.Stdout)

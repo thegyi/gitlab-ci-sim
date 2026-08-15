@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/thegyi/gitlab-ci-sim/pkg/artifacts"
 	"github.com/thegyi/gitlab-ci-sim/pkg/pipeline"
 	"github.com/thegyi/gitlab-ci-sim/pkg/variables"
 )
@@ -53,15 +54,16 @@ func (r *Result) Print(w io.Writer) {
 // DockerExecutor runs jobs in Docker containers.
 type DockerExecutor struct {
 	client string
+	store  *artifacts.Store
 }
 
 // NewDockerExecutor creates a new Docker-based executor.
-func NewDockerExecutor() *DockerExecutor {
+func NewDockerExecutor(store *artifacts.Store) *DockerExecutor {
 	client, _ := exec.LookPath("docker")
 	if client == "" {
 		client = "docker"
 	}
-	return &DockerExecutor{client: client}
+	return &DockerExecutor{client: client, store: store}
 }
 
 // Run executes the full pipeline stage by stage.
@@ -107,6 +109,13 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 		}
 	}
 
+	// Restore artifacts from jobs this one depends on.
+	if e.store != nil {
+		for _, need := range job.Needs {
+			_ = e.store.Restore(need, workDir)
+		}
+	}
+
 	mainScript := "set -e\n" + buildShellScript(append(job.BeforeScript, job.Script...))
 	mainExit, mainOut, err := e.runContainer(ctx, job, jobCtx, workDir, mainScript)
 	if err != nil {
@@ -138,12 +147,29 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 		fmt.Fprintf(os.Stdout, "│  └─ Job %s: FAILED (exit %d)\n", job.Name, mainExit)
 	}
 
+	// Save artifacts if the job produced any and the policy matches.
+	if e.store != nil && job.Artifacts != nil && shouldSaveArtifacts(mainExit, job.Artifacts.When) {
+		_ = e.store.Save(job.Name, workDir, job.Artifacts.Paths)
+	}
+
 	return &JobResult{
 		Name:     job.Name,
 		Success:  success,
 		Output:   mainOut + afterOut,
 		Duration: time.Since(start),
 	}
+}
+
+func shouldSaveArtifacts(exit int, when string) bool {
+	switch when {
+	case "always":
+		return true
+	case "on_failure":
+		return exit != 0
+	case "on_success", "":
+		return exit == 0
+	}
+	return false
 }
 
 // runContainer runs a Docker container with the given script on stdin.
