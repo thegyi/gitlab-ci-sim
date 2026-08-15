@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/thegyi/gitlab-ci-sim/pkg/artifacts"
@@ -56,6 +57,7 @@ type DockerExecutor struct {
 	client string
 	store  *artifacts.Store
 	cache  *artifacts.Store
+	mu     sync.Mutex
 }
 
 // NewDockerExecutor creates a new Docker-based executor.
@@ -67,21 +69,61 @@ func NewDockerExecutor(store, cache *artifacts.Store) *DockerExecutor {
 	return &DockerExecutor{client: client, store: store, cache: cache}
 }
 
-// Run executes the full pipeline stage by stage.
+// Run executes the pipeline as a DAG respecting job needs.
 func (e *DockerExecutor) Run(pipe *pipeline.Pipeline, vars *variables.Context) *Result {
 	start := time.Now()
 	result := &Result{Success: true}
 
-	for _, stage := range pipe.Stages {
-		fmt.Fprintf(os.Stdout, "\n┌─ Stage: %s\n", stage.Name)
-		for _, job := range stage.Jobs {
-			jr := e.runJob(context.Background(), job, vars)
-			result.JobResults = append(result.JobResults, jr)
-			if !jr.Success && !job.AllowFailure {
-				result.Success = false
-				result.Duration = time.Since(start)
-				return result
+	jobs := allPipelineJobs(pipe)
+	byName := make(map[string]*pipeline.PipelineJob, len(jobs))
+	for _, j := range jobs {
+		byName[j.Name] = j
+	}
+
+	pending := make([]*pipeline.PipelineJob, len(jobs))
+	copy(pending, jobs)
+	completedSuccess := make(map[string]bool)
+	running := 0
+	done := make(chan *JobResult)
+
+	for len(pending) > 0 || running > 0 {
+		var stillPending []*pipeline.PipelineJob
+		for _, job := range pending {
+			if needsMet(job, completedSuccess) {
+				go func(j *pipeline.PipelineJob) {
+					jr := e.runJob(context.Background(), j, vars)
+					done <- jr
+				}(job)
+				running++
+			} else {
+				stillPending = append(stillPending, job)
 			}
+		}
+		pending = stillPending
+
+		if running == 0 {
+			// No jobs are running and no new ones were ready -> dependency issue or cycle.
+			for _, job := range pending {
+				e.mu.Lock()
+				fmt.Fprintf(os.Stdout, "│  Job %s: SKIPPED (dependencies not met)\n", job.Name)
+				e.mu.Unlock()
+				result.JobResults = append(result.JobResults, &JobResult{
+					Name:    job.Name,
+					Success: false,
+				})
+				result.Success = false
+			}
+			break
+		}
+
+		jr := <-done
+		running--
+		result.JobResults = append(result.JobResults, jr)
+		job := byName[jr.Name]
+		effective := jr.Success || (job != nil && job.AllowFailure)
+		completedSuccess[jr.Name] = effective
+		if !effective {
+			result.Success = false
 		}
 	}
 
@@ -92,7 +134,8 @@ func (e *DockerExecutor) Run(pipe *pipeline.Pipeline, vars *variables.Context) *
 // runJob executes a single job in a Docker container.
 func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, vars *variables.Context) *JobResult {
 	start := time.Now()
-	fmt.Fprintf(os.Stdout, "│  ┌─ Job: %s [image: %s]\n", job.Name, job.Image)
+	var out strings.Builder
+	fmt.Fprintf(&out, "│  ┌─ Job: %s [image: %s]\n", job.Name, job.Image)
 
 	jobCtx := vars.With(job.Variables)
 	workDir, _ := os.Getwd()
@@ -100,8 +143,9 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 	missing := jobCtx.MissingValues(executionStrings(job)...)
 	if len(missing) > 0 {
 		msg := fmt.Sprintf("undefined/empty variables: %s", strings.Join(missing, ", "))
-		fmt.Fprintf(os.Stdout, "│  │  Error: %s\n", msg)
-		fmt.Fprintf(os.Stdout, "│  └─ Job %s: FAILED\n", job.Name)
+		fmt.Fprintf(&out, "│  │  Error: %s\n", msg)
+		fmt.Fprintf(&out, "│  └─ Job %s: FAILED\n", job.Name)
+		e.flushOutput(&out)
 		return &JobResult{
 			Name:     job.Name,
 			Success:  false,
@@ -126,8 +170,9 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 	mainScript := "set -e\n" + buildShellScript(append(job.BeforeScript, job.Script...))
 	mainExit, mainOut, err := e.runContainer(ctx, job, jobCtx, workDir, mainScript)
 	if err != nil {
-		fmt.Fprintf(os.Stdout, "│  │  Error: %v\n", err)
-		fmt.Fprintf(os.Stdout, "│  └─ Job %s: FAILED\n", job.Name)
+		fmt.Fprintf(&out, "│  │  Error: %v\n", err)
+		fmt.Fprintf(&out, "│  └─ Job %s: FAILED\n", job.Name)
+		e.flushOutput(&out)
 		return &JobResult{
 			Name:     job.Name,
 			Success:  false,
@@ -136,22 +181,22 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 		}
 	}
 	if mainOut != "" {
-		fmt.Fprint(os.Stdout, mainOut)
+		fmt.Fprint(&out, mainOut)
 	}
 
 	afterOut := ""
 	if len(job.AfterScript) > 0 {
 		_, afterOut, _ = e.runContainer(ctx, job, jobCtx, workDir, buildShellScript(job.AfterScript))
 		if afterOut != "" {
-			fmt.Fprint(os.Stdout, afterOut)
+			fmt.Fprint(&out, afterOut)
 		}
 	}
 
 	success := mainExit == 0
 	if success {
-		fmt.Fprintf(os.Stdout, "│  └─ Job %s: PASSED\n", job.Name)
+		fmt.Fprintf(&out, "│  └─ Job %s: PASSED\n", job.Name)
 	} else {
-		fmt.Fprintf(os.Stdout, "│  └─ Job %s: FAILED (exit %d)\n", job.Name, mainExit)
+		fmt.Fprintf(&out, "│  └─ Job %s: FAILED (exit %d)\n", job.Name, mainExit)
 	}
 
 	// Save artifacts if the job produced any and the policy matches.
@@ -169,12 +214,20 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 		_ = e.cache.Save(key, workDir, paths)
 	}
 
-	return &JobResult{
+	result := &JobResult{
 		Name:     job.Name,
 		Success:  success,
 		Output:   mainOut + afterOut,
 		Duration: time.Since(start),
 	}
+	e.flushOutput(&out)
+	return result
+}
+
+func (e *DockerExecutor) flushOutput(out *strings.Builder) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	os.Stdout.WriteString(out.String())
 }
 
 func shouldSaveArtifacts(exit int, when string) bool {
@@ -258,4 +311,23 @@ func executionStrings(job *pipeline.PipelineJob) []string {
 		ss = append(ss, job.Artifacts.Paths...)
 	}
 	return ss
+}
+
+// allPipelineJobs flattens the staged pipeline into a single job list.
+func allPipelineJobs(p *pipeline.Pipeline) []*pipeline.PipelineJob {
+	var jobs []*pipeline.PipelineJob
+	for _, stage := range p.Stages {
+		jobs = append(jobs, stage.Jobs...)
+	}
+	return jobs
+}
+
+// needsMet reports whether every job listed in job.Needs has completed successfully.
+func needsMet(job *pipeline.PipelineJob, completed map[string]bool) bool {
+	for _, need := range job.Needs {
+		if !completed[need] {
+			return false
+		}
+	}
+	return true
 }
