@@ -6,11 +6,23 @@ import (
 	"testing"
 )
 
-func TestMain(t *testing.T) {
+func TestRunMain(t *testing.T) {
 	old := os.Args
 	defer func() { os.Args = old }()
 	os.Args = []string{"gitlab-ci-sim", "help"}
-	main()
+	if got := runMain(); got != 0 {
+		t.Fatalf("expected exit 0, got %d", got)
+	}
+}
+
+func TestRunMainError(t *testing.T) {
+	old := os.Args
+	defer func() { os.Args = old }()
+	os.Args = []string{"gitlab-ci-sim", "--nonexistent"}
+	got := runMain()
+	if got != 1 {
+		t.Fatalf("expected exit 1, got %d", got)
+	}
 }
 
 func TestRunHelp(t *testing.T) {
