@@ -352,6 +352,26 @@ trigger_job:
 	}
 }
 
+func TestParseCoverage(t *testing.T) {
+	yaml := []byte(`
+build:
+  coverage: '/Coverage: (\d+\.?\d*)%$/'
+  script:
+    - echo
+`)
+	config, err := Parse(yaml)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	job := config.Jobs["build"]
+	if job == nil {
+		t.Fatal("build not found")
+	}
+	if job.Coverage != `/Coverage: (\d+\.?\d*)%$/` {
+		t.Errorf("coverage: %q", job.Coverage)
+	}
+}
+
 func TestParseImageObject(t *testing.T) {
 	yaml := []byte(`
 build:

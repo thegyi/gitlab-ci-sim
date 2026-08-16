@@ -30,7 +30,7 @@ func TestExecutorHelpers(t *testing.T) {
 		AfterScript:  []string{"after"},
 		Variables:    map[string]string{"X": "1"},
 	})
-	if len(strs) != 4 {
+	if len(strs) != 5 {
 		t.Fatalf("executionStrings: expected 4, got %d", len(strs))
 	}
 
@@ -921,6 +921,38 @@ func TestRunPipeline(t *testing.T) {
 	}
 	if len(result.JobResults) != 1 || result.JobResults[0].Name != "build" {
 		t.Fatalf("expected one build job result, got %v", result.JobResults)
+	}
+}
+
+func TestCoverageFromRegex(t *testing.T) {
+	s := "Tests passed. Coverage: 87.5%"
+	got := coverageFromRegex(`/Coverage: (\d+\.?\d*)%$/`, s)
+	if got != "87.5" {
+		t.Errorf("expected 87.5, got %q", got)
+	}
+	got = coverageFromRegex(`Coverage: \d+\.\d+%`, s)
+	if got != "Coverage: 87.5%" {
+		t.Errorf("expected full match, got %q", got)
+	}
+}
+
+func TestCoverageFromCobertura(t *testing.T) {
+	xml := `<?xml version="1.0"?><coverage line-rate="0.875"></coverage>`
+	got := coberturaCoverage(xml)
+	if got != "87.50" {
+		t.Errorf("expected 87.50, got %q", got)
+	}
+}
+
+func TestCoverageFromJacoco(t *testing.T) {
+	xml := `<?xml version="1.0"?>
+<report>
+  <counter type="LINE" missed="10" covered="90"/>
+  <counter type="LINE" missed="5" covered="95"/>
+</report>`
+	got := jacocoCoverage(xml)
+	if got != "92.50" {
+		t.Errorf("expected 92.31, got %q", got)
 	}
 }
 

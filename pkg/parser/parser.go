@@ -180,6 +180,7 @@ type Job struct {
 	Extends      interface{}         `yaml:"extends"`
 	AllowFailure AllowFailure        `yaml:"allow_failure"`
 	When         string              `yaml:"when"`
+	Coverage     string              `yaml:"coverage"`
 	StartIn      string              `yaml:"start_in"`
 	Parallel     *Parallel           `yaml:"parallel"`
 	Tags         []string            `yaml:"tags"`

@@ -41,6 +41,7 @@ type PipelineJob struct {
 	Dependencies []string
 	AllowFailure parser.AllowFailure
 	When         string
+	Coverage     string
 	Tags         []string
 	Retry        *parser.Retry
 	StartIn      string
@@ -117,6 +118,7 @@ func Build(config *parser.Config, vars *variables.Context, jobFilter []string, a
 			Dependencies: job.Dependencies,
 			AllowFailure: job.AllowFailure,
 			When:         res.When,
+			Coverage:     evalCtx.Expand(job.Coverage),
 			Tags:         job.Tags,
 			Retry:        job.Retry,
 			StartIn:      job.StartIn,

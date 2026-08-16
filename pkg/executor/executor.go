@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,6 +40,7 @@ type JobResult struct {
 	Success  bool
 	ExitCode int
 	Output   string
+	Coverage string
 	Duration time.Duration
 }
 
@@ -182,7 +184,7 @@ func (e *DockerExecutor) Run(ctx context.Context, pipe *pipeline.Pipeline, vars 
 func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, vars *variables.Context) *JobResult {
 	start := time.Now()
 	var out strings.Builder
-	fmt.Fprintf(&out, "│  ┌─ Job: %s [image: %s]\n", job.Name, job.Image)
+	fmt.Fprintf(&out, "│  ┌─ Job: %s [image: %s]\n", job.Name, job.Image.Name)
 	e.flushOutput(&out)
 	out.Reset()
 
@@ -403,6 +405,12 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 	_ = mainRedactorOut.Flush()
 	_ = mainRedactorErr.Flush()
 
+	coverage := extractCoverage(job, mainBuf.String(), workDir, jobCtx)
+	if coverage != "" {
+		fmt.Fprintf(&out, "│  │  %s: %s%%\n", term.Cyan("Coverage"), coverage)
+		jobCtx.Set("CI_JOB_COVERAGE", coverage)
+	}
+
 	if mainErr != nil {
 		fmt.Fprintf(&out, "│  │  %s: %v\n", term.Red("Error"), mainErr)
 		fmt.Fprintf(&out, "│  └─ Job %s: %s\n", job.Name, term.Red("FAILED"))
@@ -412,6 +420,7 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 			Success:  false,
 			ExitCode: -1,
 			Output:   mainBuf.String(),
+			Coverage: coverage,
 			Duration: time.Since(start),
 		}
 	}
@@ -465,6 +474,7 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 		Success:  success,
 		ExitCode: mainExit,
 		Output:   mainBuf.String() + afterBuf.String(),
+		Coverage: coverage,
 		Duration: time.Since(start),
 	}
 	e.flushOutput(&out)
@@ -592,6 +602,100 @@ func shouldSaveCacheForWhen(when string, success bool) bool {
 		return success
 	}
 	return when == "always"
+}
+
+func extractCoverage(job *pipeline.PipelineJob, output, workDir string, ctx *variables.Context) string {
+	if job.Coverage != "" {
+		return coverageFromRegex(job.Coverage, output)
+	}
+	if job.Artifacts == nil || job.Artifacts.Reports == nil {
+		return ""
+	}
+	cr, ok := job.Artifacts.Reports["coverage_report"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	path := stringValue(cr["path"])
+	format := stringValue(cr["coverage_format"])
+	if path == "" {
+		return ""
+	}
+	path = ctx.Expand(path)
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workDir, path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return coverageFromReportData(data, format)
+}
+
+func coverageFromRegex(pattern, output string) string {
+	pattern = strings.TrimSpace(pattern)
+	if strings.HasPrefix(pattern, "/") && strings.HasSuffix(pattern, "/") {
+		pattern = pattern[1 : len(pattern)-1]
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return ""
+	}
+	m := re.FindStringSubmatch(output)
+	if len(m) >= 2 {
+		return m[1]
+	}
+	if len(m) == 1 {
+		return m[0]
+	}
+	return ""
+}
+
+func coverageFromReportData(data []byte, format string) string {
+	s := string(data)
+	switch format {
+	case "jacoco":
+		return jacocoCoverage(s)
+	default:
+		return coberturaCoverage(s)
+	}
+}
+
+func coberturaCoverage(s string) string {
+	re := regexp.MustCompile(`line-rate="([0-9.]+)"`)
+	m := re.FindStringSubmatch(s)
+	if len(m) < 2 {
+		return ""
+	}
+	v, _ := strconv.ParseFloat(m[1], 64)
+	return fmt.Sprintf("%.2f", v*100)
+}
+
+func jacocoCoverage(s string) string {
+	re := regexp.MustCompile(`<counter[^>]*type="LINE"[^>]*>`)
+	missedRe := regexp.MustCompile(`missed="(\d+)"`)
+	coveredRe := regexp.MustCompile(`covered="(\d+)"`)
+	totalMissed, totalCovered := 0, 0
+	for _, m := range re.FindAllString(s, -1) {
+		miss := missedRe.FindStringSubmatch(m)
+		cov := coveredRe.FindStringSubmatch(m)
+		if len(miss) == 2 && len(cov) == 2 {
+			a, _ := strconv.Atoi(miss[1])
+			b, _ := strconv.Atoi(cov[1])
+			totalMissed += a
+			totalCovered += b
+		}
+	}
+	if totalCovered+totalMissed == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%.2f", float64(totalCovered)*100/float64(totalCovered+totalMissed))
+}
+
+func stringValue(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	return fmt.Sprintf("%v", v)
 }
 
 func imageEntrypoint(ep []string) string {
@@ -741,6 +845,7 @@ func executionStrings(job *pipeline.PipelineJob) []string {
 	var ss []string
 	ss = append(ss, job.Image.Name)
 	ss = append(ss, job.Image.Entrypoint...)
+	ss = append(ss, job.Coverage)
 	ss = append(ss, job.BeforeScript...)
 	ss = append(ss, job.Script...)
 	ss = append(ss, job.AfterScript...)
