@@ -6,6 +6,13 @@ import (
 	"testing"
 )
 
+func TestMain(t *testing.T) {
+	old := os.Args
+	defer func() { os.Args = old }()
+	os.Args = []string{"gitlab-ci-sim", "help"}
+	main()
+}
+
 func TestRunHelp(t *testing.T) {
 	old := os.Args
 	defer func() { os.Args = old }()

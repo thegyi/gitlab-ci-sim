@@ -944,6 +944,33 @@ func TestCoverageFromCobertura(t *testing.T) {
 	}
 }
 
+func TestExtractCoverageFromReport(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "cobertura.xml"), []byte(`<?xml version="1.0"?><coverage line-rate="0.90"></coverage>`), 0644); err != nil {
+		t.Fatalf("write report: %v", err)
+	}
+	job := &pipeline.PipelineJob{
+		Name: "test",
+		Artifacts: &parser.Artifacts{
+			Reports: map[string]interface{}{
+				"coverage_report": map[string]interface{}{
+					"coverage_format": "cobertura",
+					"path":            "cobertura.xml",
+				},
+			},
+		},
+	}
+	ctx := &variables.Context{
+		Vars:     map[string]string{},
+		Declared: map[string]bool{},
+		Masked:   map[string]bool{},
+	}
+	got := extractCoverage(job, "", dir, ctx)
+	if got != "90.00" {
+		t.Errorf("expected 90.00, got %q", got)
+	}
+}
+
 func TestCoverageFromJacoco(t *testing.T) {
 	xml := `<?xml version="1.0"?>
 <report>

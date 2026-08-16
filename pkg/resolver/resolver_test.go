@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -502,6 +503,56 @@ func TestResolveEmptyDoc(t *testing.T) {
 	}
 	if len(resolved) != 0 {
 		t.Errorf("expected empty, got %q", resolved)
+	}
+}
+
+func TestResolveIncludeProject(t *testing.T) {
+	dir := t.TempDir()
+	repo := filepath.Join(dir, "repo")
+	if err := os.MkdirAll(repo, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	configPath := filepath.Join(repo, "ci.yml")
+	if err := os.WriteFile(configPath, []byte(".template:\n  image: project:latest\n"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(""), 0644); err != nil {
+		t.Fatalf("write gitignore: %v", err)
+	}
+	cmds := [][]string{
+		{"git", "init"},
+		{"git", "config", "user.email", "test@example.com"},
+		{"git", "config", "user.name", "Test"},
+		{"git", "add", "."},
+		{"git", "commit", "-m", "init"},
+	}
+	for _, c := range cmds {
+		cmd := exec.Command(c[0], c[1:]...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(c[1:], " "), err, string(out))
+		}
+	}
+
+	yml := []byte(fmt.Sprintf(`
+include:
+  project: %s
+  ref: master
+  file: ci.yml
+
+build:
+  stage: build
+  extends: .template
+  script:
+    - echo
+`, "file://"+repo))
+	m := resolveMap(t, yml, "")
+	if m["stages"] != nil {
+		t.Error("stages should not have been added")
+	}
+	template, ok := m[".template"].(map[string]interface{})
+	if !ok || template["image"] != "project:latest" {
+		t.Fatalf("expected project template, got: %v", m[".template"])
 	}
 }
 
