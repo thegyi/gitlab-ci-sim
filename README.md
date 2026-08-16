@@ -215,13 +215,49 @@ The simulator seeds the following variables from your local git state:
 └── README.md
 ```
 
-## Notes and limitations
+## Feature support
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| `stages`, `variables`, `workflow: rules`, `default:` | Supported | |
+| Jobs (`script`, `before_script`, `after_script`) | Supported | |
+| `image:` (string or `{ name, entrypoint }`) | Supported | |
+| `extends:`, `!reference` | Supported | `extends:` accepts a single name or a list. |
+| `include:` (local, remote, project, template, component) | Supported | Remote/project/component require network/Git. |
+| `rules:` (if, changes, exists, when, variables) | Supported | Bare variable `if:` is treated as a boolean. |
+| `only:` / `except:` | Supported | |
+| `needs:` (incl. `optional`, `artifacts`) | Supported | |
+| `dependencies:` | Supported | |
+| `retry:` | Supported | Scalar and mapping forms. |
+| `parallel:` | Supported | Scalar and matrix. |
+| `services:` | Supported | With network aliases and health checks. |
+| `artifacts:` | Supported | Paths and `reports: coverage_report`. |
+| `cache:` | Supported | Key prefix, `key: { files }`, `untracked`, `when`, `policy`. |
+| `trigger:` | Partial | Skipped locally by default; real trigger via `--trigger-mode=gitlab`. |
+| `when:` (on_success, on_failure, always, manual, delayed) | Supported | |
+| `allow_failure:` | Supported | Scalar, mapping and `exit_codes`. |
+| `coverage:` regex | Supported | Sets `CI_JOB_COVERAGE`. |
+| Masked variables | Supported | Redacted from output. |
+| `tags:` | Supported | Untagged jobs always run. |
+| Docker / Podman runtime | Supported | Requires the `docker` or `podman` CLI. |
+| `fake` runtime | Supported | Fast test mode; runs `sh` on the host. |
+| DAG execution | Supported | Based on `needs:` / `dependencies:`. |
+| `pages:` | Not supported | GitLab Pages is a deployment feature with no local equivalent. |
+| `environment:` | Not supported | No environment API to publish to. |
+| `release:` | Not supported | No GitLab release API integration. |
+| `resource_group:` | Not supported | Local runner has no concurrency control. |
+| `interruptible:` | Not supported | No cross-pipeline cancellation. |
+| `id_tokens:`, `secrets:` | Not supported | No Vault/CI ID token integration. |
+| Docker-in-Docker / privileged containers | Not supported | |
+| Kubernetes executor | Not supported | Only Docker/Podman/fake runtimes. |
+
+## Limitations
 
 - `trigger:` jobs are skipped locally by default. Use `--trigger-mode=gitlab` to
 create the downstream pipeline via the GitLab API (requires `CI_SERVER_URL`
 and `GITLAB_TOKEN` or `CI_JOB_TOKEN`).
-- Some advanced GitLab features are not yet implemented (e.g. Docker-in-Docker /
-privileged containers).
+- Some advanced GitLab features are intentionally out of scope for a local
+simulator (see the **Not supported** entries in the table above).
 
 ## Development
 
