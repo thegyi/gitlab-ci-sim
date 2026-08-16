@@ -141,7 +141,7 @@ func Build(branch string, configVars map[string]string, configMasked map[string]
 	ctx.Vars["CI_COMMIT_SHA"] = sha
 	ctx.Vars["CI_COMMIT_SHORT_SHA"] = shortSha
 	ctx.Vars["CI_DEFAULT_BRANCH"] = getDefaultBranch()
-	ctx.Vars["CI_PROJECT_DIR"] = "/builds/project"
+	ctx.Vars["CI_PROJECT_DIR"] = repoDir
 	ctx.Vars["CI_PROJECT_NAME"] = filepath.Base(repoDir)
 	ctx.Vars["CI_PROJECT_NAMESPACE"] = namespace
 	ctx.Vars["CI_PROJECT_ROOT_NAMESPACE"] = rootNamespace

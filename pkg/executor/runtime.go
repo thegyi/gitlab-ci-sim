@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -88,19 +89,38 @@ func (r *CmdRuntime) RemoveNetwork(ctx context.Context, name string) error {
 }
 
 func (r *CmdRuntime) Run(ctx context.Context, opts RunOpts) (int, error) {
-	if opts.Entrypoint == "" {
-		opts.Entrypoint = "sh"
-	}
 	if opts.Stdout == nil {
 		opts.Stdout = io.Discard
 	}
 	if opts.Stderr == nil {
 		opts.Stderr = io.Discard
 	}
+
+	// When no image is specified, act as a shell executor and run the script
+	// directly on the host in the project working directory.
+	if opts.Image == "" {
+		cmd := exec.CommandContext(ctx, "sh", "-c", opts.Script)
+		cmd.Dir = opts.WorkDir
+		cmd.Env = append(os.Environ(), opts.Env...)
+		cmd.Stdout = opts.Stdout
+		cmd.Stderr = opts.Stderr
+		err := cmd.Run()
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				return exitErr.ExitCode(), nil
+			}
+			return -1, fmt.Errorf("run: %w", err)
+		}
+		return 0, nil
+	}
+
+	if opts.Entrypoint == "" {
+		opts.Entrypoint = "sh"
+	}
 	args := []string{
 		"run", "--rm", "-i",
-		"-v", fmt.Sprintf("%s:/builds/project", opts.WorkDir),
-		"-w", "/builds/project",
+		"-v", fmt.Sprintf("%s:%s", opts.WorkDir, opts.WorkDir),
+		"-w", opts.WorkDir,
 		"--entrypoint", opts.Entrypoint,
 	}
 	if opts.Network != "" {

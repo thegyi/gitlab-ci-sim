@@ -286,8 +286,6 @@ func resolveImage(job *parser.Job, defaults *parser.JobDefaults, vars *variables
 		img = job.Image
 	} else if defaults != nil && defaults.Image != "" {
 		img = defaults.Image
-	} else {
-		img = "alpine:latest"
 	}
 	return vars.Expand(img)
 }

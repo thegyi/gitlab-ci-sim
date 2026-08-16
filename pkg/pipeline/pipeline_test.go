@@ -219,8 +219,8 @@ func TestResolveHelpers(t *testing.T) {
 	}
 
 	img = resolveImage(&parser.Job{}, nil, &variables.Context{Vars: map[string]string{}})
-	if img != "alpine:latest" {
-		t.Fatalf("resolveImage: expected default alpine:latest, got %q", img)
+	if img != "" {
+		t.Fatalf("resolveImage: expected no image, got %q", img)
 	}
 
 	job := &parser.Job{BeforeScript: []string{"a"}, AfterScript: []string{"b"}}
