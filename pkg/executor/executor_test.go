@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -941,6 +942,180 @@ func TestCoverageFromCobertura(t *testing.T) {
 	got := coberturaCoverage(xml)
 	if got != "87.50" {
 		t.Errorf("expected 87.50, got %q", got)
+	}
+}
+
+func TestCacheKeyDefault(t *testing.T) {
+	ctx := &variables.Context{Vars: map[string]string{}, Declared: map[string]bool{}}
+	if got := cacheKey(nil, "", ctx); got != "default" {
+		t.Errorf("expected default, got %q", got)
+	}
+	if got := cacheKey(&parser.CacheKey{Prefix: ""}, "", ctx); got != "default" {
+		t.Errorf("expected default, got %q", got)
+	}
+}
+
+func TestCacheKeyPrefixOnly(t *testing.T) {
+	ctx := &variables.Context{Vars: map[string]string{"X": "v"}, Declared: map[string]bool{"X": true}}
+	if got := cacheKey(&parser.CacheKey{Prefix: "$X"}, "", ctx); got != "v" {
+		t.Errorf("expected v, got %q", got)
+	}
+}
+
+func TestCacheKeyFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a"), []byte("alpha"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b"), []byte("beta"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	ctx := &variables.Context{Vars: map[string]string{}, Declared: map[string]bool{}}
+	k := cacheKey(&parser.CacheKey{Prefix: "cache", Files: []string{"a", "b"}}, dir, ctx)
+	if !strings.HasPrefix(k, "cache-") {
+		t.Errorf("expected prefix, got %q", k)
+	}
+}
+
+func TestUntrackedFiles(t *testing.T) {
+	dir := t.TempDir()
+	cmds := [][]string{
+		{"git", "init"},
+		{"git", "config", "user.email", "test@example.com"},
+		{"git", "config", "user.name", "Test"},
+	}
+	for _, c := range cmds {
+		cmd := exec.Command(c[0], c[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(c[1:], " "), err, string(out))
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "untracked.txt"), []byte("x"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	files := untrackedFiles(dir)
+	if len(files) != 1 || files[0] != "untracked.txt" {
+		t.Errorf("expected untracked.txt, got %v", files)
+	}
+}
+
+func TestImageEntrypoint(t *testing.T) {
+	if got := imageEntrypoint(nil); got != "sh" {
+		t.Errorf("expected sh, got %q", got)
+	}
+	if got := imageEntrypoint([]string{}); got != "sh" {
+		t.Errorf("expected sh, got %q", got)
+	}
+	if got := imageEntrypoint([]string{"/bin/bash"}); got != "/bin/bash" {
+		t.Errorf("expected /bin/bash, got %q", got)
+	}
+}
+
+func TestSetStrictVariables(t *testing.T) {
+	e := &DockerExecutor{}
+	e.SetStrictVariables(false)
+	if !e.skipVariableCheck {
+		t.Error("expected skip variable check to be true")
+	}
+	e.SetStrictVariables(true)
+	if e.skipVariableCheck {
+		t.Error("expected skip variable check to be false")
+	}
+}
+
+func TestCoverageFromReportDataJacoco(t *testing.T) {
+	xml := `<?xml version="1.0"?>
+<report>
+  <counter type="LINE" missed="20" covered="80"/>
+</report>`
+	if got := coverageFromReportData([]byte(xml), "jacoco"); got != "80.00" {
+		t.Errorf("expected 80.00, got %q", got)
+	}
+}
+
+func TestTriggerPipelineSuccess(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"id": 123, "web_url": "https://example.com/pipeline/123"}`))
+	}))
+	defer server.Close()
+
+	e := &DockerExecutor{}
+	ctx := &variables.Context{
+		Vars: map[string]string{
+			"GITLAB_TOKEN":  "token",
+			"CI_SERVER_URL": server.URL,
+		},
+		Declared: map[string]bool{"GITLAB_TOKEN": true, "CI_SERVER_URL": true},
+		Masked:   map[string]bool{},
+	}
+	msg, err := e.triggerPipeline(ctx, &parser.Trigger{Project: "group/project", Branch: "main"})
+	if err != nil {
+		t.Fatalf("triggerPipeline: %v", err)
+	}
+	if !strings.Contains(msg, "123") {
+		t.Errorf("expected pipeline id, got %q", msg)
+	}
+}
+
+func TestGitlabTokenCIJobToken(t *testing.T) {
+	ctx := &variables.Context{
+		Vars:     map[string]string{"CI_JOB_TOKEN": "job-token"},
+		Declared: map[string]bool{"CI_JOB_TOKEN": true},
+		Masked:   map[string]bool{},
+	}
+	token, header := gitlabToken(ctx)
+	if token != "job-token" || header != "JOB-TOKEN" {
+		t.Errorf("got token %q header %q", token, header)
+	}
+}
+
+func TestRunJobWithCacheAndArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	old, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(old)
+
+	if err := os.WriteFile(filepath.Join(dir, "out.txt"), []byte("hello"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	store, _ := artifacts.NewStore(filepath.Join(dir, "store"))
+	cache, _ := artifacts.NewStore(filepath.Join(dir, "cache"))
+	e := &DockerExecutor{runtime: &FakeRuntime{}, store: store, cache: cache}
+	vars := &variables.Context{
+		Vars:     map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared: map[string]bool{"CI_COMMIT_BRANCH": true},
+		Masked:   map[string]bool{},
+	}
+	job := &pipeline.PipelineJob{
+		Name:   "build",
+		Image:  parser.Image{},
+		Script: []string{"echo done"},
+		Artifacts: &parser.Artifacts{
+			Paths: []string{"out.txt"},
+		},
+		Cache: &parser.Cache{
+			Key:   &parser.CacheKey{Prefix: "c"},
+			Paths: []string{"out.txt"},
+		},
+	}
+	result := e.runJob(context.Background(), job, vars)
+	if !result.Success {
+		t.Fatalf("expected job to pass, got: %v", result)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "store", "build", "out.txt")); err != nil {
+		t.Errorf("artifact not saved: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "cache", "c", "out.txt")); err == nil {
+		// cache key is just 'c' because no files
+	} else if _, err2 := os.Stat(filepath.Join(dir, "cache", "default", "out.txt")); err2 == nil {
+		// default
+	} else {
+		t.Errorf("cache not saved")
 	}
 }
 

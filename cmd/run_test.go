@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/thegyi/gitlab-ci-sim/pkg/pipeline"
@@ -308,6 +310,115 @@ build:
 	}
 	if err := runJobs(cmd, nil); err != nil {
 		t.Fatalf("runJobs list failed: %v", err)
+	}
+}
+
+func TestRunJobsUnknownRuntime(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "gitlab-ci.yml")
+	content := `
+build:
+  image: alpine:latest
+  script:
+    - echo done
+`
+	if err := os.WriteFile(cfg, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cmd := newRunCmd(cfg)
+	cmd.Flags().Set("runtime", "unknown")
+	err := runJobs(cmd, nil)
+	if err == nil {
+		t.Fatal("expected error for unknown runtime")
+	}
+	if !strings.Contains(err.Error(), "unknown") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunJobsInvalidYAML(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "gitlab-ci.yml")
+	if err := os.WriteFile(cfg, []byte("invalid: ["), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cmd := newRunCmd(cfg)
+	if err := runJobs(cmd, nil); err == nil {
+		t.Fatal("expected error for invalid YAML")
+	}
+}
+
+func TestRunJobsJobNotFound(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "gitlab-ci.yml")
+	content := `
+build:
+  image: alpine:latest
+  script:
+    - echo done
+`
+	if err := os.WriteFile(cfg, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cmd := newRunCmd(cfg)
+	err := runJobs(cmd, []string{"missing"})
+	if err == nil {
+		t.Fatal("expected error for missing job")
+	}
+}
+
+func TestRunJobsNonexistentConfig(t *testing.T) {
+	cmd := newRunCmd(filepath.Join(t.TempDir(), "missing.yml"))
+	if err := runJobs(cmd, nil); err == nil {
+		t.Fatal("expected error for missing config")
+	}
+}
+
+func TestWaitForChange(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ci.yml")
+	if err := os.WriteFile(path, []byte("x"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	info, _ := os.Stat(path)
+	lastMod := info.ModTime()
+	done := make(chan struct{})
+	go func() {
+		<-time.After(100 * time.Millisecond)
+		os.WriteFile(path, []byte("y"), 0644)
+	}()
+	go func() {
+		if err := waitForChange(path, &lastMod); err != nil {
+			t.Errorf("waitForChange: %v", err)
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("waitForChange timed out")
+	}
+}
+
+func TestRunJobsNoJobsMatched(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "gitlab-ci.yml")
+	content := `
+build:
+  image: alpine:latest
+  tags:
+    - docker
+  script:
+    - echo done
+`
+	if err := os.WriteFile(cfg, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cmd := newRunCmd(cfg)
+	cmd.Flags().Set("tags", "gpu")
+	err := runJobs(cmd, nil)
+	if err == nil {
+		t.Fatal("expected error for no jobs matched")
 	}
 }
 

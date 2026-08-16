@@ -27,6 +27,16 @@ func resolveMap(t *testing.T, data []byte, baseDir string) map[string]interface{
 	return m
 }
 
+func TestResolveEmpty(t *testing.T) {
+	data, err := Resolve([]byte(""), "")
+	if err != nil {
+		t.Fatalf("Resolve empty: %v", err)
+	}
+	if string(data) != "" {
+		t.Errorf("expected empty, got %q", string(data))
+	}
+}
+
 func TestResolveExtends(t *testing.T) {
 	yml := []byte(`
 stages:
@@ -210,6 +220,30 @@ build_job:
 	job := m["build_job"].(map[string]interface{})
 	if job["script"] != "prod" {
 		t.Errorf("expected scalar reference 'prod', got %v", job["script"])
+	}
+}
+
+func TestResolveReferenceValid(t *testing.T) {
+	yml := []byte(`
+.base:
+  image: alpine:latest
+
+job:
+  image: !reference [.base, image]
+  script:
+    - echo
+`)
+	m, err := Resolve(yml, "")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	var out map[string]interface{}
+	if err := yaml.Unmarshal(m, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	job := out["job"].(map[string]interface{})
+	if job["image"] != "alpine:latest" {
+		t.Errorf("expected image resolved, got %v", job["image"])
 	}
 }
 
@@ -506,6 +540,175 @@ func TestResolveEmptyDoc(t *testing.T) {
 	}
 }
 
+func TestResolveIncludeProjectMissingRef(t *testing.T) {
+	dir := t.TempDir()
+	repo := filepath.Join(dir, "repo")
+	if err := os.MkdirAll(repo, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "ci.yml"), []byte(".template:\n  image: project:latest\n"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	cmds := [][]string{
+		{"git", "init"},
+		{"git", "config", "user.email", "test@example.com"},
+		{"git", "config", "user.name", "Test"},
+		{"git", "add", "."},
+		{"git", "commit", "-m", "init"},
+	}
+	for _, c := range cmds {
+		cmd := exec.Command(c[0], c[1:]...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(c[1:], " "), err, string(out))
+		}
+	}
+	yml := []byte(fmt.Sprintf(`
+include:
+  project: %s
+  ref: nonexistent
+  file: ci.yml
+`, "file://"+repo))
+	_, err := Resolve(yml, "")
+	if err == nil {
+		t.Fatal("expected error for missing ref")
+	}
+}
+
+func TestResolveReferenceMissingNoPanic(t *testing.T) {
+	yml := []byte(`
+job:
+  image: !reference [.missing, image]
+  script:
+    - echo
+`)
+	if _, err := Resolve(yml, ""); err != nil {
+		t.Fatalf("Resolve should not fail on missing reference: %v", err)
+	}
+}
+
+func TestResolveIncludeMergesScalar(t *testing.T) {
+	dir := t.TempDir()
+	main := []byte(`
+include:
+  - common.yml
+
+build:
+  script:
+    - echo
+`)
+	common := []byte(`
+build: alpine
+`)
+	if err := os.WriteFile(filepath.Join(dir, "main.yml"), main, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "common.yml"), common, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "main.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := resolveMap(t, data, dir)
+	build := m["build"].(map[string]interface{})
+	if build["script"].([]interface{})[0] != "echo" {
+		t.Errorf("build overwritten: %v", build)
+	}
+}
+
+func TestResolveIncludeMergesNestedMapping(t *testing.T) {
+	dir := t.TempDir()
+	main := []byte(`
+include:
+  - common.yml
+
+.config:
+  options:
+    a: main
+
+build:
+  script:
+    - echo
+`)
+	common := []byte(`
+.config:
+  options:
+    b: common
+`)
+	if err := os.WriteFile(filepath.Join(dir, "main.yml"), main, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "common.yml"), common, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "main.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := resolveMap(t, data, dir)
+	cfg := m[".config"].(map[string]interface{})
+	opts := cfg["options"].(map[string]interface{})
+	if opts["a"] != "main" || opts["b"] != "common" {
+		t.Errorf("nested merge: %v", opts)
+	}
+}
+
+func TestResolveIncludeMergesMapping(t *testing.T) {
+	dir := t.TempDir()
+	main := []byte(`
+include:
+  - common.yml
+
+variables:
+  VAR1: main
+  VAR2: main
+
+build:
+  script:
+    - echo
+`)
+	common := []byte(`
+variables:
+  VAR2: common
+  VAR3: common
+`)
+	if err := os.WriteFile(filepath.Join(dir, "main.yml"), main, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "common.yml"), common, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "main.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := resolveMap(t, data, dir)
+	vars := m["variables"].(map[string]interface{})
+	if vars["VAR1"] != "main" {
+		t.Errorf("VAR1: %v", vars["VAR1"])
+	}
+	if vars["VAR2"] != "main" {
+		t.Errorf("VAR2 should keep main value, got %v", vars["VAR2"])
+	}
+	if vars["VAR3"] != "common" {
+		t.Errorf("VAR3: %v", vars["VAR3"])
+	}
+}
+
+func TestResolveIncludeProjectBadURL(t *testing.T) {
+	yml := []byte(`
+include:
+  project: /no/host
+  ref: main
+  file: ci.yml
+`)
+	_, err := Resolve(yml, "")
+	if err == nil {
+		t.Fatal("expected error for bad project URL")
+	}
+}
+
 func TestResolveIncludeProject(t *testing.T) {
 	dir := t.TempDir()
 	repo := filepath.Join(dir, "repo")
@@ -553,6 +756,88 @@ build:
 	template, ok := m[".template"].(map[string]interface{})
 	if !ok || template["image"] != "project:latest" {
 		t.Fatalf("expected project template, got: %v", m[".template"])
+	}
+}
+
+func TestResolveIncludeMergesStages(t *testing.T) {
+	dir := t.TempDir()
+	main := []byte(`
+stages:
+  - build
+
+include:
+  - common.yml
+
+build_job:
+  stage: build
+  script:
+    - echo
+`)
+	common := []byte(`
+stages:
+  - build
+  - test
+`)
+	if err := os.WriteFile(filepath.Join(dir, "main.yml"), main, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "common.yml"), common, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "main.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := resolveMap(t, data, dir)
+	stages := m["stages"].([]interface{})
+	if len(stages) != 2 {
+		t.Errorf("expected 2 stages, got %d", len(stages))
+	}
+}
+
+func TestResolveExtendsInvalidType(t *testing.T) {
+	yml := []byte(`
+tpl:
+  image: alpine:latest
+
+job:
+  extends: 123
+  script:
+    - echo
+`)
+	if _, err := Resolve(yml, ""); err != nil {
+		t.Fatalf("Resolve should ignore invalid extends: %v", err)
+	}
+}
+
+func TestResolveExtendsList(t *testing.T) {
+	yml := []byte(`
+.base:
+  image: alpine:latest
+
+.build:
+  before_script:
+    - echo before
+
+job:
+  extends:
+    - .base
+    - .build
+  script:
+    - echo job
+`)
+	m := resolveMap(t, yml, "")
+	job := m["job"].(map[string]interface{})
+	if job["image"] != "alpine:latest" {
+		t.Errorf("expected image from .base, got %v", job["image"])
+	}
+	bs := job["before_script"].([]interface{})
+	if len(bs) != 1 || bs[0] != "echo before" {
+		t.Errorf("unexpected before_script: %v", bs)
+	}
+	sc := job["script"].([]interface{})
+	if len(sc) != 1 || sc[0] != "echo job" {
+		t.Errorf("unexpected script: %v", sc)
 	}
 }
 
