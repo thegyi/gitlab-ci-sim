@@ -44,7 +44,7 @@ func TestBuildBasic(t *testing.T) {
 			"test": {
 				Stage:  "test",
 				Script: []string{"go test"},
-				Needs:  []string{"build"},
+				Needs:  parser.Needs{{Job: "build"}},
 			},
 		},
 	}

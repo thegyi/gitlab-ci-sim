@@ -37,7 +37,7 @@ type PipelineJob struct {
 	Services     []parser.Service
 	Artifacts    *parser.Artifacts
 	Cache        *parser.Cache
-	Needs        []string
+	Needs        parser.Needs
 	Dependencies []string
 	AllowFailure parser.AllowFailure
 	When         string
@@ -147,7 +147,7 @@ func (p *Pipeline) Print(w io.Writer) {
 			}
 			fmt.Fprintf(w, "    - %s [image: %s]\n", term.Bold(j.Name), img)
 			if len(j.Needs) > 0 {
-				fmt.Fprintf(w, "      needs: %s\n", strings.Join(j.Needs, ", "))
+				fmt.Fprintf(w, "      needs: %s\n", strings.Join(j.Needs.Names(), ", "))
 			}
 			if len(j.Dependencies) > 0 {
 				fmt.Fprintf(w, "      dependencies: %s\n", strings.Join(j.Dependencies, ", "))
@@ -243,7 +243,7 @@ func cloneJob(base *PipelineJob) *PipelineJob {
 	for k, v := range base.Masked {
 		j.Masked[k] = v
 	}
-	j.Needs = append([]string{}, base.Needs...)
+	j.Needs = append(parser.Needs{}, base.Needs...)
 	j.Dependencies = append([]string{}, base.Dependencies...)
 	j.Services = append([]parser.Service{}, base.Services...)
 	j.Script = append([]string{}, base.Script...)

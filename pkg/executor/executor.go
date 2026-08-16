@@ -328,12 +328,16 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 
 	// Restore artifacts from jobs this one depends on.
 	if e.store != nil {
-		artifactSources := job.Needs
 		if len(job.Dependencies) > 0 {
-			artifactSources = job.Dependencies
-		}
-		for _, need := range artifactSources {
-			_ = e.store.Restore(need, workDir)
+			for _, name := range job.Dependencies {
+				_ = e.store.Restore(name, workDir)
+			}
+		} else {
+			for _, need := range job.Needs {
+				if need.Artifacts == nil || *need.Artifacts {
+					_ = e.store.Restore(need.Job, workDir)
+				}
+			}
 		}
 	}
 
@@ -722,7 +726,11 @@ func parseStartIn(s string) (time.Duration, error) {
 
 func needsMet(job *pipeline.PipelineJob, completed map[string]bool) bool {
 	for _, need := range job.Needs {
-		if !completed[need] {
+		effective, finished := completed[need.Job]
+		if !finished {
+			return false
+		}
+		if !effective && !need.Optional {
 			return false
 		}
 	}
@@ -732,8 +740,11 @@ func needsMet(job *pipeline.PipelineJob, completed map[string]bool) bool {
 func missingNeeds(job *pipeline.PipelineJob, completed map[string]bool) []string {
 	var missing []string
 	for _, need := range job.Needs {
-		if !completed[need] {
-			missing = append(missing, need)
+		effective, finished := completed[need.Job]
+		if !finished {
+			missing = append(missing, need.Job)
+		} else if !effective && !need.Optional {
+			missing = append(missing, need.Job)
 		}
 	}
 	return missing

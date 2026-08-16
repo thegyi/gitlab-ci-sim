@@ -285,7 +285,7 @@ build_job:
 	if job.AfterScript[0] != "echo after" {
 		t.Errorf("after_script: %v", job.AfterScript)
 	}
-	if len(job.Needs) != 1 || job.Needs[0] != "prep" {
+	if len(job.Needs) != 1 || job.Needs[0].Job != "prep" {
 		t.Errorf("needs: %v", job.Needs)
 	}
 	if len(job.Dependencies) != 1 || job.Dependencies[0] != "prep" {
@@ -349,6 +349,46 @@ trigger_job:
 	}
 	if config.Jobs["trigger_job"].Trigger.Branch != "main" {
 		t.Errorf("expected trigger branch main, got %v", config.Jobs["trigger_job"].Trigger.Branch)
+	}
+}
+
+func TestParseNeeds(t *testing.T) {
+	yaml := []byte(`
+stages:
+  - build
+  - test
+
+build:
+  stage: build
+  script:
+    - echo
+
+test:
+  stage: test
+  needs:
+    - build
+    - job: extra
+      optional: true
+      artifacts: false
+  script:
+    - echo
+`)
+	config, err := Parse(yaml)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	job := config.Jobs["test"]
+	if job == nil {
+		t.Fatal("test not found")
+	}
+	if len(job.Needs) != 2 {
+		t.Fatalf("expected 2 needs, got %d", len(job.Needs))
+	}
+	if job.Needs[0].Job != "build" || job.Needs[0].Optional || !*job.Needs[0].Artifacts {
+		t.Errorf("build need: %v", job.Needs[0])
+	}
+	if job.Needs[1].Job != "extra" || !job.Needs[1].Optional || *job.Needs[1].Artifacts {
+		t.Errorf("extra need: %v", job.Needs[1])
 	}
 }
 

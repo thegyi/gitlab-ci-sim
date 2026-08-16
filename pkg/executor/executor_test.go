@@ -36,7 +36,7 @@ func TestExecutorHelpers(t *testing.T) {
 
 	job := &pipeline.PipelineJob{
 		Name:  "job",
-		Needs: []string{"a"},
+		Needs: parser.Needs{{Job: "a"}},
 	}
 	if needsMet(job, map[string]bool{"a": true}) != true {
 		t.Error("needsMet should be true")
@@ -347,7 +347,7 @@ func TestRunPipelineMissingNeeds(t *testing.T) {
 			"orphan": {
 				Stage:  "build",
 				Script: []string{"echo"},
-				Needs:  []string{"does_not_exist"},
+				Needs:  parser.Needs{{Job: "does_not_exist"}},
 			},
 		},
 	}
@@ -382,7 +382,7 @@ func TestRunPipelineNeedsFailure(t *testing.T) {
 			"test": {
 				Stage:  "test",
 				Script: []string{"echo test"},
-				Needs:  []string{"build"},
+				Needs:  parser.Needs{{Job: "build"}},
 			},
 		},
 	}
@@ -418,6 +418,47 @@ func TestNewRuntime(t *testing.T) {
 	}
 }
 
+func TestRunPipelineOptionalNeeds(t *testing.T) {
+	rt := &mockRuntime{exit: []int{1, 0}}
+	e := &DockerExecutor{runtime: rt}
+	config := &parser.Config{
+		Stages: []string{"build", "test"},
+		Jobs: map[string]*parser.Job{
+			"build": {
+				Stage:  "build",
+				Script: []string{"exit 1"},
+			},
+			"test": {
+				Stage:  "test",
+				Script: []string{"echo test"},
+				Needs:  parser.Needs{{Job: "build", Optional: true}},
+			},
+		},
+	}
+	ctx := &variables.Context{
+		Vars:     map[string]string{"CI_COMMIT_BRANCH": "main"},
+		Declared: map[string]bool{"CI_COMMIT_BRANCH": true},
+		Masked:   map[string]bool{},
+	}
+	pipe, err := pipeline.Build(config, ctx, nil, false, nil)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	result := e.Run(context.Background(), pipe, ctx)
+	if result.Success {
+		t.Fatal("expected pipeline to be unsuccessful because build failed")
+	}
+	if len(result.JobResults) != 2 {
+		t.Fatalf("expected 2 job results, got %d", len(result.JobResults))
+	}
+	if result.JobResults[0].Success {
+		t.Error("build should have failed")
+	}
+	if !result.JobResults[1].Success {
+		t.Error("test with optional need should have run and passed")
+	}
+}
+
 func TestRunPipelineWithNeeds(t *testing.T) {
 	e, err := NewDockerExecutor("fake", nil, nil)
 	if err != nil {
@@ -433,7 +474,7 @@ func TestRunPipelineWithNeeds(t *testing.T) {
 			"test": {
 				Stage:  "test",
 				Script: []string{"echo test"},
-				Needs:  []string{"build"},
+				Needs:  parser.Needs{{Job: "build"}},
 			},
 		},
 	}
@@ -638,7 +679,7 @@ func TestRunPipelineParallel(t *testing.T) {
 			"c": {
 				Stage:  "test",
 				Script: []string{"echo c"},
-				Needs:  []string{"a", "b"},
+				Needs:  parser.Needs{{Job: "a"}, {Job: "b"}},
 			},
 		},
 	}

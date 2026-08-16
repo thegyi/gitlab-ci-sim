@@ -72,8 +72,8 @@ func lintConfig(cmd *cobra.Command, args []string) error {
 			errs = append(errs, fmt.Sprintf("job %q references unknown stage %q", name, job.Stage))
 		}
 		for _, n := range job.Needs {
-			if !jobNames[n] {
-				errs = append(errs, fmt.Sprintf("job %q needs unknown job %q", name, n))
+			if !jobNames[n.Job] {
+				errs = append(errs, fmt.Sprintf("job %q needs unknown job %q", name, n.Job))
 			}
 		}
 		for _, d := range job.Dependencies {
@@ -122,7 +122,10 @@ func hasCycle(jobs map[string]*parser.Job) bool {
 			rec[name] = false
 			return false
 		}
-		deps := append([]string{}, job.Needs...)
+		deps := make([]string, 0, len(job.Needs)+len(job.Dependencies))
+		for _, n := range job.Needs {
+			deps = append(deps, n.Job)
+		}
 		deps = append(deps, job.Dependencies...)
 		for _, d := range deps {
 			if !visited[d] && dfs(d) {

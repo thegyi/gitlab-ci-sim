@@ -102,6 +102,47 @@ func (a *AllowFailure) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	return fmt.Errorf("allow_failure must be a boolean or a mapping with exit_codes")
 }
 
+// Need represents a single dependency entry in needs:.
+// It can be a plain job name or an object with options.
+type Need struct {
+	Job       string `yaml:"job"`
+	Optional  bool   `yaml:"optional"`
+	Artifacts *bool  `yaml:"artifacts"`
+}
+
+// UnmarshalYAML supports a string job name or a mapping with job/optional/artifacts.
+func (n *Need) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	defaultArtifacts := true
+	var s string
+	if err := unmarshal(&s); err == nil {
+		n.Job = s
+		n.Artifacts = &defaultArtifacts
+		return nil
+	}
+	type raw Need
+	var r raw
+	if err := unmarshal(&r); err == nil {
+		*n = Need(r)
+		if n.Artifacts == nil {
+			n.Artifacts = &defaultArtifacts
+		}
+		return nil
+	}
+	return fmt.Errorf("needs item must be a string or mapping")
+}
+
+// Needs is a slice of Need entries.
+type Needs []Need
+
+// Names returns the job names of each Need.
+func (n Needs) Names() []string {
+	names := make([]string, 0, len(n))
+	for _, need := range n {
+		names = append(names, need.Job)
+	}
+	return names
+}
+
 // Job represents a single CI job.
 type Job struct {
 	Name         string
@@ -114,7 +155,7 @@ type Job struct {
 	Rules        []Rule              `yaml:"rules"`
 	Only         *OnlyExcept         `yaml:"only"`
 	Except       *OnlyExcept         `yaml:"except"`
-	Needs        []string            `yaml:"needs"`
+	Needs        Needs               `yaml:"needs"`
 	Dependencies []string            `yaml:"dependencies"`
 	Artifacts    *Artifacts          `yaml:"artifacts"`
 	Cache        *Cache              `yaml:"cache"`

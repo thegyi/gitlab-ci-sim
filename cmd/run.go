@@ -188,7 +188,7 @@ func runJobs(cmd *cobra.Command, args []string) error {
 				for _, job := range stage.Jobs {
 					extra := ""
 					if len(job.Needs) > 0 {
-						extra = fmt.Sprintf(" (needs: %s)", strings.Join(job.Needs, ", "))
+						extra = fmt.Sprintf(" (needs: %s)", strings.Join(job.Needs.Names(), ", "))
 					}
 					fmt.Fprintf(os.Stdout, "    - %s%s\n", job.Name, extra)
 				}
