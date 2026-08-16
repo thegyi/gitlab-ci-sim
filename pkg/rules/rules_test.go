@@ -353,6 +353,26 @@ func TestMatchRefs(t *testing.T) {
 	}
 }
 
+func TestEvalIfBareVariable(t *testing.T) {
+	ctx := testContext()
+	ok, err := evalIf(`CI_PIPELINE_SOURCE`, ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Error("expected bare variable to be truthy")
+	}
+
+	ctx.Vars["EMPTY"] = ""
+	ok, err = evalIf(`EMPTY`, ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Error("expected empty variable to be false")
+	}
+}
+
 func TestBuildResult(t *testing.T) {
 	cases := []struct {
 		when   string

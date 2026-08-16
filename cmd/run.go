@@ -36,7 +36,7 @@ func init() {
 	runCmd.Flags().Bool("watch", false, "Re-run the pipeline when .gitlab-ci.yml changes")
 	runCmd.Flags().String("runtime", "docker", "Container runtime to use: docker, podman, or fake")
 	runCmd.Flags().String("trigger-mode", "local", "Trigger handling: local (no-op) or gitlab (call GitLab API)")
-	runCmd.Flags().Bool("strict-variables", true, "Abort jobs that reference undefined or empty variables")
+
 	runCmd.Flags().Bool("list", false, "List jobs that would run and exit")
 	runCmd.Flags().Bool("manual", false, "Treat when: manual jobs as runnable")
 	runCmd.Flags().Bool("interactive", false, "Interactively select which jobs to run")

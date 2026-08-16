@@ -41,6 +41,7 @@ func newRunCmd(file string) *cobra.Command {
 	cmd.Flags().String("branch", "", "")
 	cmd.Flags().StringSlice("variable", nil, "")
 	cmd.Flags().String("env-file", "", "")
+	cmd.Flags().Bool("strict-variables", true, "")
 	cmd.Flags().Bool("list", false, "")
 	cmd.Flags().Bool("manual", false, "")
 	cmd.Flags().Bool("interactive", false, "")

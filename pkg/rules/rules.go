@@ -115,6 +115,15 @@ func buildResult(when string, ruleVars map[string]string, allowManual bool) *Res
 
 var regexLiteralRe = regexp.MustCompile(`(=~|!~)\s*/([^/]*)/`)
 var varRe = regexp.MustCompile(`\$\{[^\}]+\}|\$[A-Za-z_][A-Za-z0-9_]*`)
+var bareVarRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func bareVariableName(expr string) (string, bool) {
+	expr = strings.TrimSpace(expr)
+	if bareVarRe.MatchString(expr) {
+		return expr, true
+	}
+	return "", false
+}
 
 func evalIf(expr string, vars *variables.Context) (bool, error) {
 	// Convert GitLab /pattern/ regex literals to govaluate strings.
@@ -135,6 +144,11 @@ func evalIf(expr string, vars *variables.Context) (bool, error) {
 
 	// GitLab's null is an empty string in a govaluate expression.
 	expr = strings.ReplaceAll(expr, "null", `""`)
+
+	// A bare variable reference like $VAR in rules:if is truthy when the value is non-empty.
+	if name, bare := bareVariableName(expr); bare {
+		return vars.Get(name) != "", nil
+	}
 
 	params := make(map[string]interface{}, len(vars.Vars))
 	for k, v := range vars.Vars {

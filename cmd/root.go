@@ -25,6 +25,7 @@ func init() {
 	rootCmd.PersistentFlags().StringP("file", "f", ".gitlab-ci.yml", "Path to the CI config file")
 	rootCmd.PersistentFlags().StringSliceP("variable", "v", nil, "Override variables (KEY=VALUE)")
 	rootCmd.PersistentFlags().StringP("env-file", "e", "", "Load variables from a .env file (KEY=VALUE)")
+	rootCmd.PersistentFlags().Bool("strict-variables", true, "Abort jobs that reference undefined or empty variables (run command only)")
 }
 
 // loadEnvFile reads KEY=VALUE lines from a .env-style file.
