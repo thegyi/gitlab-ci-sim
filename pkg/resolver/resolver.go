@@ -117,6 +117,27 @@ func resolveIncludes(root *yaml.Node, baseDir string, seen map[string]bool) erro
 				return fmt.Errorf("project include %q: %w", inc.project, err)
 			}
 			defer os.RemoveAll(childBase)
+		case inc.template != "":
+			key = inc.template
+			if seen[key] {
+				return fmt.Errorf("cyclic include: %s", key)
+			}
+			seen[key] = true
+			data, err = fetchTemplate(inc.template)
+			if err != nil {
+				return fmt.Errorf("template include %q: %w", inc.template, err)
+			}
+		case inc.component != "":
+			key = inc.component
+			if seen[key] {
+				return fmt.Errorf("cyclic include: %s", key)
+			}
+			seen[key] = true
+			data, childBase, err = fetchComponent(inc.component)
+			if err != nil {
+				return fmt.Errorf("component include %q: %w", inc.component, err)
+			}
+			defer os.RemoveAll(childBase)
 		default:
 			continue
 		}
@@ -143,11 +164,13 @@ func resolveIncludes(root *yaml.Node, baseDir string, seen map[string]bool) erro
 }
 
 type includeRef struct {
-	local   string
-	remote  string
-	project string
-	ref     string
-	file    string
+	local     string
+	remote    string
+	project   string
+	ref       string
+	file      string
+	template  string
+	component string
 }
 
 func normalizeIncludes(node *yaml.Node) ([]includeRef, error) {
@@ -202,7 +225,15 @@ func includeFromMapping(node *yaml.Node) (includeRef, error) {
 	if refNode != nil && refNode.Kind == yaml.ScalarNode {
 		ref.ref = refNode.Value
 	}
-	if ref.local == "" && ref.remote == "" && ref.project == "" {
+	templateNode := mappingValue(node, "template")
+	if templateNode != nil && templateNode.Kind == yaml.ScalarNode {
+		ref.template = templateNode.Value
+	}
+	componentNode := mappingValue(node, "component")
+	if componentNode != nil && componentNode.Kind == yaml.ScalarNode {
+		ref.component = componentNode.Value
+	}
+	if ref.local == "" && ref.remote == "" && ref.project == "" && ref.template == "" && ref.component == "" {
 		return includeRef{}, nil
 	}
 	if ref.project != "" && ref.file == "" {
@@ -232,6 +263,74 @@ func fetchRemote(url string) ([]byte, string, error) {
 		return nil, "", err
 	}
 	return data, "", nil
+}
+
+func fetchTemplate(name string) ([]byte, error) {
+	url := templateURL(name)
+	data, _, err := fetchRemote(url)
+	return data, err
+}
+
+func templateURL(name string) string {
+	if strings.Contains(name, "://") {
+		return name
+	}
+	return fmt.Sprintf("https://gitlab.com/gitlab-org/gitlab/-/raw/master/lib/gitlab/ci/templates/%s", name)
+}
+
+func fetchComponent(spec string) ([]byte, string, error) {
+	host, project, ref, file, err := parseComponent(spec)
+	if err != nil {
+		return nil, "", err
+	}
+	if ref == "" {
+		ref = "main"
+	}
+	if host == "" {
+		host = strings.TrimPrefix(strings.TrimSuffix(os.Getenv("CI_SERVER_URL"), "/"), "https://")
+		if host == "" {
+			host = "gitlab.com"
+		}
+	}
+	url := fmt.Sprintf("https://%s/%s.git", host, project)
+	tmpDir, err := os.MkdirTemp("", "gitlab-ci-sim-include-")
+	if err != nil {
+		return nil, "", err
+	}
+
+	cmd := exec.Command("git", "clone", "--depth", "1", "--branch", ref, "--single-branch", url, tmpDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		os.RemoveAll(tmpDir)
+		return nil, "", fmt.Errorf("git clone %s: %w\n%s", url, err, string(out))
+	}
+	data, err := os.ReadFile(filepath.Join(tmpDir, file))
+	if err != nil {
+		os.RemoveAll(tmpDir)
+		return nil, "", err
+	}
+	return data, tmpDir, nil
+}
+
+func parseComponent(spec string) (host, project, ref, file string, err error) {
+	if i := strings.LastIndex(spec, "@"); i >= 0 {
+		ref = spec[i+1:]
+		spec = spec[:i]
+	}
+	parts := strings.Split(spec, "/")
+	if len(parts) < 3 {
+		return "", "", "", "", fmt.Errorf("component must be [host/]namespace/project/path")
+	}
+	start := 0
+	if strings.Contains(parts[0], ".") || strings.HasPrefix(parts[0], "http") {
+		host = parts[0]
+		start = 1
+	}
+	if len(parts)-start < 3 {
+		return "", "", "", "", fmt.Errorf("component must be [host/]namespace/project/path")
+	}
+	project = parts[start] + "/" + parts[start+1]
+	file = strings.Join(parts[start+2:], "/")
+	return host, project, ref, file, nil
 }
 
 func fetchProject(project, ref, file string) ([]byte, string, error) {

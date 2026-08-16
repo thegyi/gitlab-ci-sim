@@ -2,10 +2,12 @@ package resolver
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -502,3 +504,65 @@ func TestResolveEmptyDoc(t *testing.T) {
 		t.Errorf("expected empty, got %q", resolved)
 	}
 }
+
+func TestResolveIncludeTemplate(t *testing.T) {
+	old := httpClient
+	defer func() { httpClient = old }()
+	httpClient = &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Host == "gitlab.com" && strings.HasSuffix(req.URL.Path, "templates/Ruby.gitlab-ci.yml") {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(".ruby_template:\n  image: ruby:2.7\n")),
+				}, nil
+			}
+			return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(strings.NewReader("not found"))}, nil
+		}),
+	}
+
+	yml := []byte(`
+include:
+  - template: Ruby.gitlab-ci.yml
+
+build:
+  stage: build
+  extends: .ruby_template
+  script:
+    - echo build
+`)
+	m := resolveMap(t, yml, "")
+	if m["stages"] != nil {
+		t.Error("stages should not have been added from template")
+	}
+	template, ok := m[".ruby_template"].(map[string]interface{})
+	if !ok || template["image"] != "ruby:2.7" {
+		t.Fatalf("expected ruby template, got: %v", m[".ruby_template"])
+	}
+}
+
+func TestParseComponent(t *testing.T) {
+	cases := []struct {
+		spec                     string
+		host, project, ref, file string
+	}{
+		{"gitlab.com/org/project/path/to/component.yml@1.0", "gitlab.com", "org/project", "1.0", "path/to/component.yml"},
+		{"org/project/path/to/component.yml", "", "org/project", "", "path/to/component.yml"},
+		{"my.gitlab.com/org/project/ci.yml@main", "my.gitlab.com", "org/project", "main", "ci.yml"},
+	}
+	for _, c := range cases {
+		host, project, ref, file, err := parseComponent(c.spec)
+		if err != nil {
+			t.Errorf("parseComponent(%q): %v", c.spec, err)
+			continue
+		}
+		if host != c.host || project != c.project || ref != c.ref || file != c.file {
+			t.Errorf("parseComponent(%q) = %q, %q, %q, %q; want %q, %q, %q, %q",
+				c.spec, host, project, ref, file, c.host, c.project, c.ref, c.file)
+		}
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
