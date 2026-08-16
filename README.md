@@ -78,6 +78,7 @@ go build -o gitlab-ci-sim .
 | `--runtime` | `docker`, `podman`, or `fake` (default: `docker`). |
 | `--tags` | Run only jobs with one of these tags (untagged jobs always run). |
 | `--manual` | Treat `when: manual` jobs as runnable. |
+| `--strict-variables` | Abort jobs that reference undefined/empty variables (default: `true`; use `false` to disable). |
 | `--trigger-mode` | `local` (default) or `gitlab` for real downstream triggers. |
 | `--watch` | Re-run when `.gitlab-ci.yml` changes. |
 | `--dry-run` | Preview without running. |

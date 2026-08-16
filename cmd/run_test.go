@@ -206,6 +206,29 @@ build:
 	}
 }
 
+func TestRunJobsStrictVariablesDisabled(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "gitlab-ci.yml")
+	content := `
+stages:
+  - build
+
+build:
+  stage: build
+  script:
+    - echo $UNKNOWN
+`
+	if err := os.WriteFile(cfg, []byte(content), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cmd := newRunCmd(cfg)
+	cmd.Flags().Set("strict-variables", "false")
+	cmd.Flags().Set("runtime", "fake")
+	if err := runJobs(cmd, nil); err != nil {
+		t.Fatalf("runJobs with --strict-variables=false failed: %v", err)
+	}
+}
+
 func TestRunJobsWithBranchAndVariable(t *testing.T) {
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "gitlab-ci.yml")

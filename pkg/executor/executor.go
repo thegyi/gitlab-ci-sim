@@ -61,16 +61,22 @@ func (r *Result) Print(w io.Writer) {
 
 // DockerExecutor runs jobs in a container runtime.
 type DockerExecutor struct {
-	runtime     Runtime
-	store       *artifacts.Store
-	cache       *artifacts.Store
-	mu          sync.Mutex
-	triggerMode string
+	runtime           Runtime
+	store             *artifacts.Store
+	cache             *artifacts.Store
+	mu                sync.Mutex
+	triggerMode       string
+	skipVariableCheck bool
 }
 
 // SetTriggerMode configures how trigger: jobs are handled ("local" or "gitlab").
 func (e *DockerExecutor) SetTriggerMode(mode string) {
 	e.triggerMode = mode
+}
+
+// SetStrictVariables controls whether missing/empty variables abort a job.
+func (e *DockerExecutor) SetStrictVariables(strict bool) {
+	e.skipVariableCheck = !strict
 }
 
 // NewDockerExecutor creates a new container executor with the given runtime.
@@ -221,17 +227,19 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 	}
 	workDir, _ := os.Getwd()
 
-	missing := jobCtx.MissingValues(executionStrings(job)...)
-	if len(missing) > 0 {
-		msg := fmt.Sprintf("undefined/empty variables: %s", strings.Join(missing, ", "))
-		fmt.Fprintf(&out, "│  │  %s: %s\n", term.Red("Error"), msg)
-		fmt.Fprintf(&out, "│  └─ Job %s: %s\n", job.Name, term.Red("FAILED"))
-		e.flushOutput(&out)
-		return &JobResult{
-			Name:     job.Name,
-			Success:  false,
-			Output:   msg,
-			Duration: time.Since(start),
+	if !e.skipVariableCheck {
+		missing := jobCtx.MissingValues(executionStrings(job)...)
+		if len(missing) > 0 {
+			msg := fmt.Sprintf("undefined/empty variables: %s", strings.Join(missing, ", "))
+			fmt.Fprintf(&out, "│  │  %s: %s\n", term.Red("Error"), msg)
+			fmt.Fprintf(&out, "│  └─ Job %s: %s\n", job.Name, term.Red("FAILED"))
+			e.flushOutput(&out)
+			return &JobResult{
+				Name:     job.Name,
+				Success:  false,
+				Output:   msg,
+				Duration: time.Since(start),
+			}
 		}
 	}
 
