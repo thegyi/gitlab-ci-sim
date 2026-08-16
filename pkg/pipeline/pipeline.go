@@ -27,7 +27,7 @@ type Stage struct {
 // PipelineJob is a job ready for execution.
 type PipelineJob struct {
 	Name         string
-	Image        string
+	Image        parser.Image
 	Script       []string
 	BeforeScript []string
 	AfterScript  []string
@@ -141,7 +141,7 @@ func (p *Pipeline) Print(w io.Writer) {
 	for _, s := range p.Stages {
 		fmt.Fprintf(w, "\n  %s\n", term.Cyan(fmt.Sprintf("Stage: %s (%d jobs)", s.Name, len(s.Jobs))))
 		for _, j := range s.Jobs {
-			img := j.Image
+			img := j.Image.Name
 			if img == "" {
 				img = "(default)"
 			}
@@ -280,14 +280,18 @@ func cartesianProduct(block map[string][]string) []map[string]string {
 	return result
 }
 
-func resolveImage(job *parser.Job, defaults *parser.JobDefaults, vars *variables.Context) string {
-	img := ""
-	if job.Image != "" {
+func resolveImage(job *parser.Job, defaults *parser.JobDefaults, vars *variables.Context) parser.Image {
+	img := parser.Image{}
+	if job.Image.Name != "" {
 		img = job.Image
-	} else if defaults != nil && defaults.Image != "" {
+	} else if defaults != nil && defaults.Image.Name != "" {
 		img = defaults.Image
 	}
-	return vars.Expand(img)
+	img.Name = vars.Expand(img.Name)
+	for i, e := range img.Entrypoint {
+		img.Entrypoint[i] = vars.Expand(e)
+	}
+	return img
 }
 
 func resolveBeforeScript(job *parser.Job, defaults *parser.JobDefaults) []string {

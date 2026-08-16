@@ -66,7 +66,7 @@ func graph(cmd *cobra.Command, args []string) error {
 	for _, stage := range pipe.Stages {
 		fmt.Fprintf(os.Stdout, "%s\n", term.Cyan(fmt.Sprintf("Stage: %s (%d jobs)", stage.Name, len(stage.Jobs))))
 		for _, job := range stage.Jobs {
-			img := job.Image
+			img := job.Image.Name
 			if img == "" {
 				img = "(default)"
 			}

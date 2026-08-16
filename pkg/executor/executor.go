@@ -3,12 +3,16 @@ package executor
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -322,7 +326,7 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 
 	// Restore cache if configured.
 	if e.cache != nil && job.Cache != nil && shouldPullCache(job.Cache.Policy) {
-		key := jobCtx.Expand(cacheKey(job.Cache.Key))
+		key := cacheKey(job.Cache.Key, workDir, jobCtx)
 		_ = e.cache.Restore(key, workDir)
 	}
 
@@ -377,12 +381,12 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 			out.Reset()
 		}
 		mainExit, mainErr = e.runtime.Run(ctx, RunOpts{
-			Image:      job.Image,
+			Image:      job.Image.Name,
 			WorkDir:    workDir,
 			Network:    network,
 			Env:        envList,
 			Script:     mainScript,
-			Entrypoint: "sh",
+			Entrypoint: imageEntrypoint(job.Image.Entrypoint),
 			Stdout:     mainRedactorOut,
 			Stderr:     mainRedactorErr,
 		})
@@ -418,12 +422,12 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 		afterRedactorOut := &redactingWriter{dest: afterSafe, values: redact}
 		afterRedactorErr := &redactingWriter{dest: afterSafe, values: redact}
 		_, _ = e.runtime.Run(ctx, RunOpts{
-			Image:      job.Image,
+			Image:      job.Image.Name,
 			WorkDir:    workDir,
 			Network:    network,
 			Env:        envList,
 			Script:     buildShellScript(job.AfterScript),
-			Entrypoint: "sh",
+			Entrypoint: imageEntrypoint(job.Image.Entrypoint),
 			Stdout:     afterRedactorOut,
 			Stderr:     afterRedactorErr,
 		})
@@ -444,11 +448,14 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 	}
 
 	// Save cache if configured.
-	if e.cache != nil && job.Cache != nil && shouldPushCache(job.Cache.Policy) {
-		key := jobCtx.Expand(cacheKey(job.Cache.Key))
+	if e.cache != nil && job.Cache != nil && shouldPushCache(job.Cache.Policy) && shouldSaveCacheForWhen(job.Cache.When, success) {
+		key := cacheKey(job.Cache.Key, workDir, jobCtx)
 		paths := make([]string, 0, len(job.Cache.Paths))
 		for _, p := range job.Cache.Paths {
 			paths = append(paths, jobCtx.Expand(p))
+		}
+		if job.Cache.Untracked {
+			paths = append(paths, untrackedFiles(workDir)...)
 		}
 		_ = e.cache.Save(key, workDir, paths)
 	}
@@ -542,11 +549,34 @@ func shouldSaveArtifacts(exit int, when string) bool {
 	return false
 }
 
-func cacheKey(k string) string {
-	if k == "" {
+func cacheKey(k *parser.CacheKey, workDir string, ctx *variables.Context) string {
+	if k == nil {
 		return "default"
 	}
-	return k
+	prefix := ctx.Expand(k.Prefix)
+	if len(k.Files) == 0 {
+		if prefix == "" {
+			return "default"
+		}
+		return prefix
+	}
+	h := sha1.New()
+	for _, f := range k.Files {
+		path := ctx.Expand(f)
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(workDir, path)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		h.Write(data)
+	}
+	hash := hex.EncodeToString(h.Sum(nil))
+	if prefix == "" {
+		return hash
+	}
+	return prefix + "-" + hash
 }
 
 func shouldPullCache(policy string) bool {
@@ -555,6 +585,33 @@ func shouldPullCache(policy string) bool {
 
 func shouldPushCache(policy string) bool {
 	return policy == "" || policy == "push" || policy == "pull-push" || policy == "push-pull"
+}
+
+func shouldSaveCacheForWhen(when string, success bool) bool {
+	if when == "" || when == "on_success" {
+		return success
+	}
+	return when == "always"
+}
+
+func imageEntrypoint(ep []string) string {
+	if len(ep) > 0 {
+		return ep[0]
+	}
+	return "sh"
+}
+
+func untrackedFiles(dir string) []string {
+	cmd := exec.Command("git", "ls-files", "--others", "--exclude-standard")
+	cmd.Dir = dir
+	out, _ := cmd.Output()
+	var files []string
+	for _, f := range strings.Split(string(out), "\n") {
+		if f = strings.TrimSpace(f); f != "" {
+			files = append(files, f)
+		}
+	}
+	return files
 }
 
 var gitlabHTTPClient = &http.Client{Timeout: 30 * time.Second}
@@ -682,7 +739,8 @@ func buildShellScript(lines []string) string {
 // executionStrings collects all strings that may contain CI variable references.
 func executionStrings(job *pipeline.PipelineJob) []string {
 	var ss []string
-	ss = append(ss, job.Image)
+	ss = append(ss, job.Image.Name)
+	ss = append(ss, job.Image.Entrypoint...)
 	ss = append(ss, job.BeforeScript...)
 	ss = append(ss, job.Script...)
 	ss = append(ss, job.AfterScript...)
@@ -691,7 +749,10 @@ func executionStrings(job *pipeline.PipelineJob) []string {
 		ss = append(ss, svc.Command...)
 	}
 	if job.Cache != nil {
-		ss = append(ss, job.Cache.Key)
+		if job.Cache.Key != nil {
+			ss = append(ss, job.Cache.Key.Prefix)
+			ss = append(ss, job.Cache.Key.Files...)
+		}
 		ss = append(ss, job.Cache.Paths...)
 	}
 	if job.Artifacts != nil {

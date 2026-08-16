@@ -19,9 +19,26 @@ type Config struct {
 	Variables map[string]Variable
 }
 
+// Image represents the image: configuration, which may be a string or a mapping.
+type Image struct {
+	Name       string   `yaml:"name"`
+	Entrypoint []string `yaml:"entrypoint"`
+}
+
+// UnmarshalYAML supports both scalar strings and { name, entrypoint } mappings.
+func (i *Image) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var s string
+	if err := unmarshal(&s); err == nil {
+		i.Name = s
+		return nil
+	}
+	type raw Image
+	return unmarshal((*raw)(i))
+}
+
 // JobDefaults represents the `default:` section.
 type JobDefaults struct {
-	Image        string    `yaml:"image"`
+	Image        Image     `yaml:"image"`
 	BeforeScript []string  `yaml:"before_script"`
 	AfterScript  []string  `yaml:"after_script"`
 	Services     []Service `yaml:"services"`
@@ -147,7 +164,7 @@ func (n Needs) Names() []string {
 type Job struct {
 	Name         string
 	Stage        string              `yaml:"stage"`
-	Image        string              `yaml:"image"`
+	Image        Image               `yaml:"image"`
 	Script       []string            `yaml:"script"`
 	BeforeScript []string            `yaml:"before_script"`
 	AfterScript  []string            `yaml:"after_script"`
@@ -211,11 +228,30 @@ type Artifacts struct {
 	Reports map[string]interface{} `yaml:"reports"`
 }
 
+// CacheKey represents a cache key, which may be a scalar or a mapping.
+type CacheKey struct {
+	Prefix string   `yaml:"prefix"`
+	Files  []string `yaml:"files"`
+}
+
+// UnmarshalYAML supports cache.key as a string or { prefix, files } mapping.
+func (k *CacheKey) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var s string
+	if err := unmarshal(&s); err == nil {
+		k.Prefix = s
+		return nil
+	}
+	type raw CacheKey
+	return unmarshal((*raw)(k))
+}
+
 // Cache represents the cache: configuration.
 type Cache struct {
-	Key    string   `yaml:"key"`
-	Paths  []string `yaml:"paths"`
-	Policy string   `yaml:"policy"`
+	Key       *CacheKey `yaml:"key"`
+	Paths     []string  `yaml:"paths"`
+	Policy    string    `yaml:"policy"`
+	Untracked bool      `yaml:"untracked"`
+	When      string    `yaml:"when"`
 }
 
 // Service represents a Docker service (linked container).

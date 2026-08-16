@@ -52,7 +52,7 @@ deploy_job:
 	if buildJob.Stage != "build" {
 		t.Errorf("expected stage 'build', got %q", buildJob.Stage)
 	}
-	if buildJob.Image != "golang:1.21" {
+	if buildJob.Image.Name != "golang:1.21" {
 		t.Errorf("expected image 'golang:1.21', got %q", buildJob.Image)
 	}
 	if len(buildJob.Script) != 1 || buildJob.Script[0] != "go build ./..." {
@@ -153,8 +153,8 @@ build_job:
 		t.Fatal("build_job not found")
 	}
 	want := "$CI_REGISTRY/pr-team/pr/ubuntu-x86_64:focal"
-	if job.Image != want {
-		t.Errorf("expected image %q, got %q", want, job.Image)
+	if job.Image.Name != want {
+		t.Errorf("expected image %q, got %q", want, job.Image.Name)
 	}
 }
 
@@ -189,8 +189,8 @@ build_job:
 	if config.Default == nil {
 		t.Fatal("default not parsed")
 	}
-	if config.Default.Image != "alpine:latest" {
-		t.Errorf("expected default image, got %q", config.Default.Image)
+	if config.Default.Image.Name != "alpine:latest" {
+		t.Errorf("expected default image, got %q", config.Default.Image.Name)
 	}
 	if len(config.Default.BeforeScript) != 1 || config.Default.BeforeScript[0] != "echo setup" {
 		t.Errorf("unexpected default before_script: %v", config.Default.BeforeScript)
@@ -300,7 +300,7 @@ build_job:
 	if job.Parallel == nil || job.Parallel.Scalar != 2 {
 		t.Errorf("parallel: %v", job.Parallel)
 	}
-	if job.Cache == nil || job.Cache.Key != "v1" {
+	if job.Cache == nil || job.Cache.Key == nil || job.Cache.Key.Prefix != "v1" {
 		t.Errorf("cache: %v", job.Cache)
 	}
 	if job.Artifacts == nil || len(job.Artifacts.Paths) != 1 {
@@ -349,6 +349,62 @@ trigger_job:
 	}
 	if config.Jobs["trigger_job"].Trigger.Branch != "main" {
 		t.Errorf("expected trigger branch main, got %v", config.Jobs["trigger_job"].Trigger.Branch)
+	}
+}
+
+func TestParseImageObject(t *testing.T) {
+	yaml := []byte(`
+build:
+  image:
+    name: alpine:latest
+    entrypoint: ["/bin/sh", "-c"]
+  script:
+    - echo
+`)
+	config, err := Parse(yaml)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	job := config.Jobs["build"]
+	if job == nil {
+		t.Fatal("build not found")
+	}
+	if job.Image.Name != "alpine:latest" || len(job.Image.Entrypoint) != 2 {
+		t.Errorf("image: %v", job.Image)
+	}
+}
+
+func TestParseCacheObject(t *testing.T) {
+	yaml := []byte(`
+build:
+  cache:
+    key:
+      prefix: go
+      files:
+        - go.mod
+    paths:
+      - vendor
+    untracked: true
+    when: always
+  script:
+    - echo
+`)
+	config, err := Parse(yaml)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	job := config.Jobs["build"]
+	if job == nil {
+		t.Fatal("build not found")
+	}
+	if job.Cache == nil || job.Cache.Key == nil {
+		t.Fatal("cache not parsed")
+	}
+	if job.Cache.Key.Prefix != "go" || len(job.Cache.Key.Files) != 1 || job.Cache.Key.Files[0] != "go.mod" {
+		t.Errorf("cache key: %v", job.Cache.Key)
+	}
+	if !job.Cache.Untracked || job.Cache.When != "always" {
+		t.Errorf("cache flags: untracked=%v when=%q", job.Cache.Untracked, job.Cache.When)
 	}
 }
 

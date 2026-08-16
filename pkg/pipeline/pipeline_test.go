@@ -208,19 +208,19 @@ func TestResolveHelpers(t *testing.T) {
 		Masked:   map[string]bool{},
 	}
 
-	img := resolveImage(&parser.Job{Image: "$IMAGE"}, nil, ctx)
-	if img != "node:18" {
-		t.Fatalf("resolveImage: expected node:18, got %q", img)
+	img := resolveImage(&parser.Job{Image: parser.Image{Name: "$IMAGE"}}, nil, ctx)
+	if img.Name != "node:18" {
+		t.Fatalf("resolveImage: expected node:18, got %q", img.Name)
 	}
 
-	img = resolveImage(&parser.Job{}, &parser.JobDefaults{Image: "alpine:latest"}, ctx)
-	if img != "alpine:latest" {
-		t.Fatalf("resolveImage: expected alpine:latest, got %q", img)
+	img = resolveImage(&parser.Job{}, &parser.JobDefaults{Image: parser.Image{Name: "alpine:latest"}}, ctx)
+	if img.Name != "alpine:latest" {
+		t.Fatalf("resolveImage: expected alpine:latest, got %q", img.Name)
 	}
 
 	img = resolveImage(&parser.Job{}, nil, &variables.Context{Vars: map[string]string{}})
-	if img != "" {
-		t.Fatalf("resolveImage: expected no image, got %q", img)
+	if img.Name != "" {
+		t.Fatalf("resolveImage: expected no image, got %q", img.Name)
 	}
 
 	job := &parser.Job{BeforeScript: []string{"a"}, AfterScript: []string{"b"}}

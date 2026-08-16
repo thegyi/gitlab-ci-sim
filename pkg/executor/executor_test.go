@@ -67,8 +67,11 @@ func TestExecutorHelpers(t *testing.T) {
 	if shouldPushCache("push") != true {
 		t.Error("should push cache")
 	}
-	if cacheKey("") != "default" {
+	if cacheKey(&parser.CacheKey{Prefix: ""}, "", &variables.Context{}) != "default" {
 		t.Error("cacheKey default")
+	}
+	if cacheKey(&parser.CacheKey{Prefix: "v1"}, "", &variables.Context{}) != "v1" {
+		t.Error("cacheKey prefix")
 	}
 
 	ctx := &variables.Context{
@@ -136,7 +139,7 @@ func TestRunJobWithArtifacts(t *testing.T) {
 	e := &DockerExecutor{runtime: rt, store: store}
 	job := &pipeline.PipelineJob{
 		Name:      "save",
-		Image:     "alpine:latest",
+		Image:     parser.Image{Name: "alpine:latest"},
 		Script:    []string{"echo done"},
 		Variables: map[string]string{"CI_COMMIT_BRANCH": "main"},
 		Declared:  map[string]bool{"CI_COMMIT_BRANCH": true},
@@ -167,11 +170,11 @@ func TestRunJobWithCache(t *testing.T) {
 	e := &DockerExecutor{runtime: rt, cache: cache}
 	job := &pipeline.PipelineJob{
 		Name:      "cached",
-		Image:     "alpine:latest",
+		Image:     parser.Image{Name: "alpine:latest"},
 		Script:    []string{"echo done"},
 		Variables: map[string]string{"CI_COMMIT_BRANCH": "main"},
 		Declared:  map[string]bool{"CI_COMMIT_BRANCH": true},
-		Cache:     &parser.Cache{Paths: []string{"vendor"}, Key: "v1"},
+		Cache:     &parser.Cache{Paths: []string{"vendor"}, Key: &parser.CacheKey{Prefix: "v1"}},
 	}
 	vars := &variables.Context{
 		Vars:     map[string]string{"CI": "true"},
@@ -188,7 +191,7 @@ func TestRunJobServiceHealthCheckFailure(t *testing.T) {
 	e := &DockerExecutor{runtime: rt}
 	job := &pipeline.PipelineJob{
 		Name:   "with_service",
-		Image:  "alpine:latest",
+		Image:  parser.Image{Name: "alpine:latest"},
 		Script: []string{"echo main"},
 		Services: []parser.Service{
 			{Name: "redis:alpine", Alias: "redis"},
@@ -211,7 +214,7 @@ func TestRunJobRetryOnError(t *testing.T) {
 	e := &DockerExecutor{runtime: rt}
 	job := &pipeline.PipelineJob{
 		Name:      "retry_error",
-		Image:     "alpine:latest",
+		Image:     parser.Image{Name: "alpine:latest"},
 		Script:    []string{"echo test"},
 		Retry:     &parser.Retry{Max: 2, When: []string{"always"}},
 		Variables: map[string]string{"CI_COMMIT_BRANCH": "main"},
@@ -507,7 +510,7 @@ func TestRunJobRejectsMissingVariables(t *testing.T) {
 	e := &DockerExecutor{runtime: &FakeRuntime{}}
 	job := &pipeline.PipelineJob{
 		Name:   "test",
-		Image:  "alpine:latest",
+		Image:  parser.Image{Name: "alpine:latest"},
 		Script: []string{"echo $UNKNOWN"},
 	}
 	vars := &variables.Context{Vars: map[string]string{}, Declared: map[string]bool{}}
@@ -524,7 +527,7 @@ func TestRunJobFakeContainer(t *testing.T) {
 	e := &DockerExecutor{runtime: &FakeRuntime{}}
 	job := &pipeline.PipelineJob{
 		Name:         "test",
-		Image:        "alpine:latest",
+		Image:        parser.Image{Name: "alpine:latest"},
 		BeforeScript: []string{"echo before"},
 		Script:       []string{"echo script"},
 		Variables:    map[string]string{"CI_COMMIT_BRANCH": "main"},
@@ -580,7 +583,7 @@ func TestRunJobRetriesAndSucceeds(t *testing.T) {
 	e := &DockerExecutor{runtime: rt}
 	job := &pipeline.PipelineJob{
 		Name:      "retry_job",
-		Image:     "alpine:latest",
+		Image:     parser.Image{Name: "alpine:latest"},
 		Script:    []string{"echo test"},
 		Retry:     &parser.Retry{Max: 2},
 		Variables: map[string]string{"CI_COMMIT_BRANCH": "main"},
@@ -604,7 +607,7 @@ func TestRunJobRetryExhausted(t *testing.T) {
 	e := &DockerExecutor{runtime: rt}
 	job := &pipeline.PipelineJob{
 		Name:      "retry_job",
-		Image:     "alpine:latest",
+		Image:     parser.Image{Name: "alpine:latest"},
 		Script:    []string{"echo test"},
 		Retry:     &parser.Retry{Max: 2},
 		Variables: map[string]string{"CI_COMMIT_BRANCH": "main"},
@@ -706,7 +709,7 @@ func TestRunJobAfterScript(t *testing.T) {
 	e := &DockerExecutor{runtime: rt}
 	job := &pipeline.PipelineJob{
 		Name:        "after",
-		Image:       "alpine:latest",
+		Image:       parser.Image{Name: "alpine:latest"},
 		Script:      []string{"echo main"},
 		AfterScript: []string{"echo after"},
 		Variables:   map[string]string{"CI_COMMIT_BRANCH": "main"},
@@ -730,7 +733,7 @@ func TestRunJobRuntimeErrorNoRetry(t *testing.T) {
 	e := &DockerExecutor{runtime: rt}
 	job := &pipeline.PipelineJob{
 		Name:      "fail",
-		Image:     "alpine:latest",
+		Image:     parser.Image{Name: "alpine:latest"},
 		Script:    []string{"echo"},
 		Variables: map[string]string{"CI_COMMIT_BRANCH": "main"},
 		Declared:  map[string]bool{"CI_COMMIT_BRANCH": true},
@@ -842,7 +845,7 @@ func TestRunJobDelayed(t *testing.T) {
 	e := &DockerExecutor{runtime: rt}
 	job := &pipeline.PipelineJob{
 		Name:      "delayed_job",
-		Image:     "alpine:latest",
+		Image:     parser.Image{Name: "alpine:latest"},
 		Script:    []string{"echo delayed"},
 		When:      "delayed",
 		StartIn:   "100ms",
@@ -868,7 +871,7 @@ func TestRunJobWithService(t *testing.T) {
 	e := &DockerExecutor{runtime: rt}
 	job := &pipeline.PipelineJob{
 		Name:   "with_service",
-		Image:  "alpine:latest",
+		Image:  parser.Image{Name: "alpine:latest"},
 		Script: []string{"echo main"},
 		Services: []parser.Service{
 			{Name: "redis:alpine", Alias: "redis"},
