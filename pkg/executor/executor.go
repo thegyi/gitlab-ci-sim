@@ -360,45 +360,11 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 	envList := envListFromContext(jobCtx)
 	redact := maskedValues(jobCtx)
 
-	var beforeOutput string
+	mainScript := "set -e\necho 'Running before_script...'\n"
 	if len(job.BeforeScript) > 0 {
-		fmt.Fprintf(&out, "│  │  %s\n", term.Cyan("Running before_script..."))
-		e.flushOutput(&out)
-		out.Reset()
-		var beforeBuf bytes.Buffer
-		beforeSafe := &safeWriter{w: io.MultiWriter(&beforeBuf, os.Stdout)}
-		beforeRedactorOut := &redactingWriter{dest: beforeSafe, values: redact}
-		beforeRedactorErr := &redactingWriter{dest: beforeSafe, values: redact}
-		beforeExit, beforeErr := e.runtime.Run(ctx, RunOpts{
-			Image:      job.Image.Name,
-			WorkDir:    workDir,
-			Network:    network,
-			Env:        envList,
-			Script:     "set -e\n" + buildShellScript(job.BeforeScript),
-			Entrypoint: imageEntrypoint(job.Image.Entrypoint),
-			Stdout:     beforeRedactorOut,
-			Stderr:     beforeRedactorErr,
-		})
-		_ = beforeRedactorOut.Flush()
-		_ = beforeRedactorErr.Flush()
-		beforeOutput = beforeBuf.String()
-		if beforeErr != nil || beforeExit != 0 {
-			fmt.Fprintf(&out, "│  └─ Job %s: %s\n", job.Name, term.Red("FAILED"))
-			e.flushOutput(&out)
-			return &JobResult{
-				Name:     job.Name,
-				Success:  false,
-				ExitCode: beforeExit,
-				Output:   beforeOutput,
-				Duration: time.Since(start),
-			}
-		}
+		mainScript += buildShellScript(job.BeforeScript) + "\n"
 	}
-
-	fmt.Fprintf(&out, "│  │  %s\n", term.Cyan("Running script..."))
-	e.flushOutput(&out)
-	out.Reset()
-	mainScript := "set -e\n" + buildShellScript(job.Script)
+	mainScript += "echo 'Running script...'\n" + buildShellScript(job.Script)
 	var mainBuf bytes.Buffer
 	mainSafe := &safeWriter{w: io.MultiWriter(&mainBuf, os.Stdout)}
 	mainRedactorOut := &redactingWriter{dest: mainSafe, values: redact}
@@ -458,7 +424,7 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 			Name:     job.Name,
 			Success:  false,
 			ExitCode: -1,
-			Output:   beforeOutput + mainBuf.String(),
+			Output:   mainBuf.String(),
 			Coverage: coverage,
 			Duration: time.Since(start),
 		}
@@ -515,7 +481,7 @@ func (e *DockerExecutor) runJob(ctx context.Context, job *pipeline.PipelineJob, 
 		Name:     job.Name,
 		Success:  success,
 		ExitCode: mainExit,
-		Output:   beforeOutput + mainBuf.String() + afterBuf.String(),
+		Output:   mainBuf.String() + afterBuf.String(),
 		Coverage: coverage,
 		Duration: time.Since(start),
 	}
