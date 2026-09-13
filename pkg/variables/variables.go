@@ -184,7 +184,28 @@ func Build(branch string, configVars map[string]string, configMasked map[string]
 		}
 	}
 
+	expandContext(ctx)
+
 	return ctx, nil
+}
+
+func expandContext(ctx *Context) {
+	for {
+		changed := false
+		for k, v := range ctx.Vars {
+			if !strings.Contains(v, "$") {
+				continue
+			}
+			expanded := ctx.Expand(v)
+			if expanded != v {
+				ctx.Vars[k] = expanded
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
 }
 
 func gitOutput(args ...string) string {
