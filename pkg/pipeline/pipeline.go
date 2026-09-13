@@ -157,8 +157,14 @@ func (p *Pipeline) Print(w io.Writer) {
 			if len(j.Services) > 0 {
 				fmt.Fprintf(w, "      services: %s\n", serviceNames(j.Services))
 			}
+			for _, line := range j.BeforeScript {
+				fmt.Fprintf(w, "        %s %s\n", term.Cyan(">"), line)
+			}
 			for _, line := range j.Script {
 				fmt.Fprintf(w, "        %s %s\n", term.Yellow("$"), line)
+			}
+			for _, line := range j.AfterScript {
+				fmt.Fprintf(w, "        %s %s\n", term.Green("<"), line)
 			}
 		}
 	}

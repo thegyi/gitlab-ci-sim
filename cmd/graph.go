@@ -74,8 +74,14 @@ func graph(cmd *cobra.Command, args []string) error {
 			if len(job.Needs) > 0 {
 				fmt.Fprintf(os.Stdout, "    %s %s\n", term.Yellow("needs:"), strings.Join(job.Needs.Names(), ", "))
 			}
+			for _, line := range job.BeforeScript {
+				fmt.Fprintf(os.Stdout, "    %s %s\n", term.Cyan(">"), line)
+			}
 			for _, line := range job.Script {
 				fmt.Fprintf(os.Stdout, "    %s %s\n", term.Yellow("$"), line)
+			}
+			for _, line := range job.AfterScript {
+				fmt.Fprintf(os.Stdout, "    %s %s\n", term.Green("<"), line)
 			}
 		}
 		fmt.Fprintln(os.Stdout)
